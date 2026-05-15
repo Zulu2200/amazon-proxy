@@ -158,32 +158,41 @@ export default async function handler(req, res) {
     // ── Detect buttons in AOD response ──────────────────────
     // AOD contains actual offer data — buy box, add to cart etc.
     function detectButtons(body) {
-      const hasATC = body.includes('add-to-cart') ||
-                     body.includes('add to cart') ||
-                     body.includes('addtocart') ||
-                     body.includes('in den einkaufswagen') ||
-                     body.includes('ajouter au panier') ||
-                     body.includes('aggiungi al carrello') ||
-                     body.includes('añadir al carrito') ||
-                     body.includes('in winkelwagen') ||
-                     body.includes('lägg i kundvagnen') ||
-                     body.includes('dodaj do koszyka') ||
-                     body.includes('a-button-primary') || // Amazon's primary button class (buy/ATC)
-                     body.includes('buy-box');
+  const hasATC = body.includes('add-to-cart') ||
+                 body.includes('add to cart') ||
+                 body.includes('addtocart') ||
+                 body.includes('in den einkaufswagen') ||
+                 body.includes('einkaufswagen') ||
+                 body.includes('ajouter au panier') ||
+                 body.includes('aggiungi al carrello') ||
+                 body.includes('añadir al carrito') ||
+                 body.includes('in winkelwagen') ||
+                 body.includes('winkelwagen') ||
+                 body.includes('lägg i kundvagnen') ||
+                 body.includes('kundvagnen') ||
+                 body.includes('dodaj do koszyka') ||
+                 body.includes('koszyka') ||
+                 body.includes('a-button-primary') ||
+                 body.includes('submit.add-to-cart') ||
+                 body.includes('submit.buy-now') ||
+                 body.includes('buy-box-atc') ||
+                 body.includes('attach-base-product-button');
 
-      const hasBuy = body.includes('buy now') ||
-                     body.includes('buy-now') ||
-                     body.includes('buynow') ||
-                     body.includes('jetzt kaufen') ||
-                     body.includes('acheter maintenant') ||
-                     body.includes('acquista ora') ||
-                     body.includes('comprar ahora') ||
-                     body.includes('nu kopen') ||
-                     body.includes('köp nu') ||
-                     body.includes('kup teraz');
+  const hasBuy = body.includes('buy now') ||
+                 body.includes('buy-now') ||
+                 body.includes('buynow') ||
+                 body.includes('jetzt kaufen') ||
+                 body.includes('sofort kaufen') ||
+                 body.includes('acheter maintenant') ||
+                 body.includes('acquista ora') ||
+                 body.includes('comprar ahora') ||
+                 body.includes('nu kopen') ||
+                 body.includes('köp nu') ||
+                 body.includes('køb nu') ||
+                 body.includes('kup teraz');
 
-      return { hasATC, hasBuy };
-    }
+  return { hasATC, hasBuy };
+}
 
     const desktop = detectButtons(aodDesktopBody);
     const mobile  = detectButtons(aodMobileBody);
