@@ -1,38 +1,5 @@
-import { ProxyAgent, fetch as proxyFetch } from 'undici';
-
 export default async function handler(req, res) {
   const { asin, marketplace, token } = req.query;
-  // ── IP Debug mode ─────────────────────────────────────────
-  if (asin === 'IPTEST') {
-    const proxyHost = proxyMap[marketplace] || null;
-    const pu = process.env.PROXY_USER;
-    const pp = process.env.PROXY_PASS;
-    
-    let testDispatcher = undefined;
-    if (proxyHost && pu && pp) {
-      testDispatcher = new ProxyAgent({ uri: `http://${pu}:${pp}@${proxyHost}` });
-    }
-    
-    try {
-      const opts = { headers: { 'User-Agent': 'Mozilla/5.0' } };
-      if (testDispatcher) opts.dispatcher = testDispatcher;
-      const ipResp = await proxyFetch('https://api.ipify.org?format=json', opts);
-      const ipData = await ipResp.json();
-      return res.status(200).json({ 
-        proxyHost, 
-        hasCredentials: !!(pu && pp),
-        yourIP: ipData.ip,
-        usingProxy: !!testDispatcher
-      });
-    } catch(e) {
-      return res.status(200).json({ 
-        proxyHost, 
-        hasCredentials: !!(pu && pp),
-        error: e.message,
-        usingProxy: !!testDispatcher
-      });
-    }
-  }
 
   if (token !== process.env.SECRET_TOKEN) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -40,6 +7,103 @@ export default async function handler(req, res) {
 
   if (!asin || !marketplace) {
     return res.status(400).json({ error: 'Missing asin or marketplace' });
+  }
+
+  // ── Load undici dynamically ───────────────────────────────
+  let ProxyAgent, proxyFetch;
+  try {
+    const undici = await import('undici');
+    ProxyAgent = undici.ProxyAgent;
+    proxyFetch = undici.fetch;
+  } catch (e) {
+    return res.status(200).json({ error: 'Failed to load undici: ' + e.message });
+  }
+
+  // ── Proxy map — one residential IP per marketplace ────────
+  const proxyMap = {
+    USA:            '9.142.43.131:5301',
+    US:             '9.142.43.131:5301',
+    Canada:         '192.53.140.18:5114',
+    CA:             '192.53.140.18:5114',
+    Brazil:         '192.53.142.66:5763',
+    BR:             '192.53.142.66:5763',
+    Mexico:         '9.142.194.93:6761',
+    MX:             '9.142.194.93:6761',
+    UK:             '212.212.19.48:6199',
+    Ireland:        '212.212.18.216:6867',
+    IE:             '212.212.18.216:6867',
+    Germany:        '166.0.42.187:6195',
+    DE:             '166.0.42.187:6195',
+    Netherlands:    '104.253.199.5:5284',
+    NL:             '104.253.199.5:5284',
+    France:         '31.98.4.142:7820',
+    FR:             '31.98.4.142:7820',
+    Spain:          '46.203.60.158:7158',
+    ES:             '46.203.60.158:7158',
+    Belgium:        '46.203.144.45:7812',
+    BE:             '46.203.144.45:7812',
+    Sweden:         '82.26.114.47:6749',
+    SE:             '82.26.114.47:6749',
+    Poland:         '82.29.47.131:7855',
+    PL:             '82.29.47.131:7855',
+    Italy:          '82.24.27.117:8089',
+    IT:             '82.24.27.117:8089',
+    Australia:      '92.71.71.244:6438',
+    AU:             '92.71.71.244:6438',
+    Japan:          '82.25.225.30:5678',
+    JP:             '82.25.225.30:5678',
+    'Saudi Arabia': '82.29.239.167:5315',
+    SA:             '82.29.239.167:5315',
+    UAE:            '82.29.239.167:5315',
+    AE:             '82.29.239.167:5315',
+    India:          '82.25.225.30:5678',
+    IN:             '82.25.225.30:5678',
+  };
+
+  // ── Build proxy agent ─────────────────────────────────────
+  const proxyHost = proxyMap[marketplace];
+  const proxyUser = process.env.PROXY_USER;
+  const proxyPass = process.env.PROXY_PASS;
+
+  let dispatcher = undefined;
+  if (proxyHost && proxyUser && proxyPass) {
+    try {
+      dispatcher = new ProxyAgent({
+        uri: `http://${proxyUser}:${proxyPass}@${proxyHost}`,
+      });
+    } catch (e) {
+      return res.status(200).json({ error: 'Proxy agent failed: ' + e.message });
+    }
+  }
+
+  // ── DIAGNOSTIC MODE — test if proxy works ─────────────────
+  if (asin === 'IPTEST') {
+    try {
+      const opts = { 
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      };
+      if (dispatcher) opts.dispatcher = dispatcher;
+      
+      const ipResp = await proxyFetch('https://api.ipify.org?format=json', opts);
+      const ipData = await ipResp.json();
+      return res.status(200).json({
+        success: true,
+        proxyHost: proxyHost || 'none',
+        hasCredentials: !!(proxyUser && proxyPass),
+        visibleIP: ipData.ip,
+        usingProxy: !!dispatcher,
+        marketplace: marketplace,
+      });
+    } catch (e) {
+      return res.status(200).json({
+        success: false,
+        proxyHost: proxyHost || 'none',
+        hasCredentials: !!(proxyUser && proxyPass),
+        error: e.message,
+        usingProxy: !!dispatcher,
+        marketplace: marketplace,
+      });
+    }
   }
 
   // ── Amazon domain map ─────────────────────────────────────
@@ -83,62 +147,9 @@ export default async function handler(req, res) {
     SA:            'amazon.sa',
   };
 
-  // ── Proxy map — one residential IP per marketplace ────────
-  const proxyMap = {
-    USA:            '9.142.43.131:5301',
-    US:             '9.142.43.131:5301',
-    Canada:         '192.53.140.18:5114',
-    CA:             '192.53.140.18:5114',
-    Brazil:         '192.53.142.66:5763',
-    BR:             '192.53.142.66:5763',
-    Mexico:         '9.142.194.93:6761',
-    MX:             '9.142.194.93:6761',
-    UK:             '212.212.19.48:6199',
-    Ireland:        '212.212.18.216:6867',
-    IE:             '212.212.18.216:6867',
-    Germany:        '166.0.42.187:6195',
-    DE:             '166.0.42.187:6195',
-    Netherlands:    '104.253.199.5:5284',
-    NL:             '104.253.199.5:5284',
-    France:         '31.98.4.142:7820',
-    FR:             '31.98.4.142:7820',
-    Spain:          '46.203.60.158:7158',
-    ES:             '46.203.60.158:7158',
-    Belgium:        '46.203.144.45:7812',
-    BE:             '46.203.144.45:7812',
-    Sweden:         '82.26.114.47:6749',
-    SE:             '82.26.114.47:6749',
-    Poland:         '82.29.47.131:7855',
-    PL:             '82.29.47.131:7855',
-    Italy:          '82.24.27.117:8089',
-    IT:             '82.24.27.117:8089',
-    Australia:      '92.71.71.244:6438',
-    AU:             '92.71.71.244:6438',
-    Japan:          '82.25.225.30:5678',
-    JP:             '82.25.225.30:5678',
-    'Saudi Arabia': '82.29.239.167:5315',
-    SA:             '82.29.239.167:5315',
-    UAE:            '82.29.239.167:5315',
-    AE:             '82.29.239.167:5315',
-    India:          '82.25.225.30:5678',
-    IN:             '82.25.225.30:5678',
-  };
-
   const domain = domains[marketplace];
   if (!domain) {
     return res.status(400).json({ error: 'Unknown marketplace: ' + marketplace });
-  }
-
-  // ── Build proxy agent ─────────────────────────────────────
-  const proxyHost = proxyMap[marketplace];
-  const proxyUser = process.env.PROXY_USER;
-  const proxyPass = process.env.PROXY_PASS;
-
-  let dispatcher = undefined;
-  if (proxyHost && proxyUser && proxyPass) {
-    dispatcher = new ProxyAgent({
-      uri: `http://${proxyUser}:${proxyPass}@${proxyHost}`,
-    });
   }
 
   // ── Country-specific Accept-Language ──────────────────────
@@ -189,7 +200,6 @@ export default async function handler(req, res) {
     });
     const productBody = (await productResp.text()).toLowerCase();
 
-    // CAPTCHA / bot block
     const blocked = productBody.includes('robot check') ||
                     productBody.includes('enter the characters') ||
                     (productBody.includes('captcha') && productBody.length < 15000);
@@ -203,7 +213,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Stock status
     const notFound = productBody.includes('looking for something') ||
                      productBody.includes('page not found') ||
                      productResp.status === 404;
