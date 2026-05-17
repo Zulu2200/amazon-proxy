@@ -2,6 +2,37 @@ import { ProxyAgent, fetch as proxyFetch } from 'undici';
 
 export default async function handler(req, res) {
   const { asin, marketplace, token } = req.query;
+  // ── IP Debug mode ─────────────────────────────────────────
+  if (asin === 'IPTEST') {
+    const proxyHost = proxyMap[marketplace] || null;
+    const pu = process.env.PROXY_USER;
+    const pp = process.env.PROXY_PASS;
+    
+    let testDispatcher = undefined;
+    if (proxyHost && pu && pp) {
+      testDispatcher = new ProxyAgent({ uri: `http://${pu}:${pp}@${proxyHost}` });
+    }
+    
+    try {
+      const opts = { headers: { 'User-Agent': 'Mozilla/5.0' } };
+      if (testDispatcher) opts.dispatcher = testDispatcher;
+      const ipResp = await proxyFetch('https://api.ipify.org?format=json', opts);
+      const ipData = await ipResp.json();
+      return res.status(200).json({ 
+        proxyHost, 
+        hasCredentials: !!(pu && pp),
+        yourIP: ipData.ip,
+        usingProxy: !!testDispatcher
+      });
+    } catch(e) {
+      return res.status(200).json({ 
+        proxyHost, 
+        hasCredentials: !!(pu && pp),
+        error: e.message,
+        usingProxy: !!testDispatcher
+      });
+    }
+  }
 
   if (token !== process.env.SECRET_TOKEN) {
     return res.status(401).json({ error: 'Unauthorized' });
