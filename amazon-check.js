@@ -8,23 +8,22 @@ const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────────
-const SHEET_ID      = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
-const PROXY_USER    = process.env.PROXY_USER;
-const PROXY_PASS    = process.env.PROXY_PASS;
-const GMAIL_USER    = process.env.GMAIL_USER;    // your gmail address
-const GMAIL_PASS    = process.env.GMAIL_PASS;    // your gmail app password
-const NOTIFY_EMAIL  = process.env.GMAIL_USER;    // send to yourself
-const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions'];
+const SHEET_ID     = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
+const PROXY_USER   = process.env.PROXY_USER;
+const PROXY_PASS   = process.env.PROXY_PASS;
+const GMAIL_USER   = process.env.GMAIL_USER;
+const GMAIL_PASS   = process.env.GMAIL_PASS;
+const SKIP_SHEETS  = ['Summary', 'Template', 'Instructions'];
 
-// Random delay 3–8 seconds between checks — mimics human browsing
+// Random delay 3–8 seconds — mimics human browsing
 const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
 
-// ─── COLUMN LAYOUT ─────────────────────────────────────────────────────────────
-// A=Category, B=ASIN, C=SKU,
-// D=Desktop ATC, E=Desktop Buy, F=Mobile ATC, G=Mobile Buy,
-// H=Notes, I=Last Checked, J=URL,
-// K=Manual Check Notes ← NEVER OVERWRITTEN,
-// L=Stock Status, M=Alert
+// ─── COLUMN LAYOUT (0-based index for API, 1-based letter for reference) ───────
+// A(0)=Category, B(1)=ASIN, C(2)=SKU,
+// D(3)=Desktop ATC, E(4)=Desktop Buy, F(5)=Mobile ATC, G(6)=Mobile Buy,
+// H(7)=Notes, I(8)=Last Checked, J(9)=URL,
+// K(10)=Manual Check Notes ← NEVER OVERWRITTEN,
+// L(11)=Stock Status, M(12)=Alert
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
@@ -46,6 +45,14 @@ const MARKETPLACES = {
   'UAE':          { baseUrl: 'https://www.amazon.ae',     proxy: '82.29.239.167:5315'  },
 };
 
+// ─── COLORS ───────────────────────────────────────────────────────────────────
+const COLOR = {
+  green:      { red: 0.714, green: 0.843, blue: 0.659 }, // #B6D7A8 — Found / LIVE
+  red:        { red: 0.918, green: 0.600, blue: 0.600 }, // #EA9999 — Missing / NO BUTTONS
+  amber:      { red: 1.000, green: 0.898, blue: 0.600 }, // #FFE599 — Blocked / Error / Low stock
+  white:      { red: 1.000, green: 1.000, blue: 1.000 }, // reset background
+};
+
 // ─── GOOGLE SHEETS CLIENT ──────────────────────────────────────────────────────
 async function getSheetsClient() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
@@ -54,6 +61,110 @@ async function getSheetsClient() {
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   return google.sheets({ version: 'v4', auth });
+}
+
+// ─── APPLY CONDITIONAL FORMATTING TO ALL TABS ──────────────────────────────────
+// Clears old rules, then adds clean colour rules across all 16 marketplace tabs.
+// Runs automatically at the start of every check — no manual work needed.
+async function applyConditionalFormatting(sheets) {
+  console.log('🎨 Setting up conditional formatting on all tabs...');
+
+  // Get full spreadsheet metadata including existing conditional format rules
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SHEET_ID,
+    fields: 'sheets(properties(sheetId,title),conditionalFormats)',
+  });
+
+  const deleteRequests = [];
+  const addRequests    = [];
+
+  for (const sheet of meta.data.sheets) {
+    const tabName = sheet.properties.title;
+    if (SKIP_SHEETS.includes(tabName) || !MARKETPLACES[tabName]) continue;
+
+    const sheetId        = sheet.properties.sheetId;
+    const existingRules  = sheet.conditionalFormats || [];
+
+    // Delete ALL existing conditional format rules for this tab (reverse order)
+    for (let i = existingRules.length - 1; i >= 0; i--) {
+      deleteRequests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+    }
+
+    // ── Define ranges ──────────────────────────────────────────────────────────
+    // D:G — button columns (startRowIndex:1 = skip header row 1)
+    const buttonRange = {
+      sheetId,
+      startRowIndex:    1,
+      startColumnIndex: 3,  // D
+      endColumnIndex:   7,  // up to but not including H
+    };
+    // L — Stock Status
+    const stockRange = {
+      sheetId,
+      startRowIndex:    1,
+      startColumnIndex: 11, // L
+      endColumnIndex:   12,
+    };
+    // M — Alert
+    const alertRange = {
+      sheetId,
+      startRowIndex:    1,
+      startColumnIndex: 12, // M
+      endColumnIndex:   13,
+    };
+
+    // ── Helper to build a rule request ────────────────────────────────────────
+    const rule = (ranges, containsText, bgColor) => ({
+      addConditionalFormatRule: {
+        rule: {
+          ranges,
+          booleanRule: {
+            condition: {
+              type:   'TEXT_CONTAINS',
+              values: [{ userEnteredValue: containsText }],
+            },
+            format: { backgroundColor: bgColor },
+          },
+        },
+        index: 0,
+      },
+    });
+
+    // ── Button columns D:G ─────────────────────────────────────────────────────
+    addRequests.push(rule([buttonRange], 'Found',   COLOR.green));
+    addRequests.push(rule([buttonRange], 'Missing', COLOR.red));
+    addRequests.push(rule([buttonRange], 'BLOCKED', COLOR.amber));
+    addRequests.push(rule([buttonRange], 'Error',   COLOR.amber));
+
+    // ── Stock Status (L) — amber only for low stock warnings ──────────────────
+    addRequests.push(rule([stockRange], 'left in sto', COLOR.amber)); // "Only X left in stock"
+    addRequests.push(rule([stockRange], 'Currently unavailable', COLOR.red));
+    addRequests.push(rule([stockRange], 'In Stock', COLOR.green));
+
+    // ── Alert column (M) ──────────────────────────────────────────────────────
+    addRequests.push(rule([alertRange], 'LIVE',       COLOR.green));
+    addRequests.push(rule([alertRange], 'NO BUTTONS', COLOR.red));
+    addRequests.push(rule([alertRange], 'BLOCKED',    COLOR.amber));
+    addRequests.push(rule([alertRange], 'ERROR',      COLOR.amber));
+  }
+
+  // Send delete requests first (clears old rules)
+  if (deleteRequests.length > 0) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: deleteRequests },
+    });
+  }
+
+  // Then send add requests (applies new clean rules)
+  if (addRequests.length > 0) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: addRequests },
+    });
+  }
+
+  console.log('✅ Conditional formatting applied to all 16 tabs\n');
 }
 
 // ─── GET ALL TAB NAMES ─────────────────────────────────────────────────────────
@@ -70,22 +181,17 @@ async function getASINs(sheets, tabName) {
   });
   const rows = res.data.values || [];
   const asins = [];
-  for (let i = 1; i < rows.length; i++) {  // i=0 is header
+  for (let i = 1; i < rows.length; i++) {
     const asin = (rows[i][0] || '').trim();
     if (asin) {
-      asins.push({
-        asin,
-        sheetRow: i + 1, // 1-based (header=row1, first data=row2)
-      });
+      asins.push({ asin, sheetRow: i + 1 });
     }
   }
   return asins;
 }
 
 // ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
-// Writes D:J (ATC, Buy, Mobile ATC, Mobile Buy, Notes, Last Checked, URL)
-// and L:M (Stock Status, Alert)
-// Column K (Manual Check Notes) is NEVER touched
+// Writes D:J and L:M — column K (Manual Check Notes) is NEVER touched
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -93,12 +199,12 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: `'${tabName}'!D${sheetRow}:J${sheetRow}`,
-          values: [dToJ],   // 7 values: D,E,F,G,H,I,J
+          range:  `'${tabName}'!D${sheetRow}:J${sheetRow}`,
+          values: [dToJ],  // D, E, F, G, H, I, J
         },
         {
-          range: `'${tabName}'!L${sheetRow}:M${sheetRow}`,
-          values: [lToM],   // 2 values: L,M  (skipping K)
+          range:  `'${tabName}'!L${sheetRow}:M${sheetRow}`,
+          values: [lToM],  // L, M  (skipping K)
         },
       ],
     },
@@ -112,7 +218,7 @@ async function checkPage(browser, url, isMobile) {
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
 
-    // Hide automation flag
+    // Hide the automation flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       window.chrome = { runtime: {} };
@@ -202,14 +308,12 @@ async function checkPage(browser, url, isMobile) {
 // ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
 async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime) {
   if (!GMAIL_USER || !GMAIL_PASS) {
-    console.log('   (no email credentials set — skipping email)');
+    console.log('   (no email credentials — skipping email)');
     return;
   }
 
-  const duration = Math.round((Date.now() - startTime) / 60000);
-
-  // Build a clean HTML table of issues (blocked or missing buttons)
-  const issues = summary.filter(r => r.alert !== '✅ LIVE');
+  const duration  = Math.round((Date.now() - startTime) / 60000);
+  const issues    = summary.filter(r => r.alert !== '✅ LIVE');
   const issueRows = issues.map(r =>
     `<tr>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
@@ -220,8 +324,10 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
   ).join('');
 
   const html = `
-    <h2 style="color:#333">Amazon Listing Check — ${muTime()}</h2>
-    <p>
+    <h2 style="color:#333;font-family:Arial,sans-serif">
+      Amazon Listing Check — ${muTime()}
+    </h2>
+    <p style="font-family:Arial,sans-serif">
       ✅ <strong>${totalChecked}</strong> ASINs checked across 16 marketplaces<br>
       ⏱ Completed in <strong>${duration} minutes</strong><br>
       ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked by Amazon<br>` : ''}
@@ -229,9 +335,13 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     </p>
 
     ${issues.length === 0
-      ? `<p style="color:green;font-weight:bold">✅ All listings are LIVE — no issues found!</p>`
-      : `<h3 style="color:#c00">⚠️ ${issues.length} issue(s) need attention:</h3>
-         <table style="border-collapse:collapse;font-size:13px">
+      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">
+           ✅ All listings are LIVE — no issues found!
+         </p>`
+      : `<h3 style="color:#c00;font-family:Arial,sans-serif">
+           ⚠️ ${issues.length} issue(s) need attention:
+         </h3>
+         <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">
            <tr style="background:#f0f0f0">
              <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
              <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
@@ -242,9 +352,11 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
          </table>`
     }
 
-    <p style="margin-top:20px;color:#888;font-size:12px">
-      Full results: 
-      <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}">Open Google Sheet</a>
+    <p style="margin-top:24px;font-family:Arial,sans-serif">
+      <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}" 
+         style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">
+        Open Google Sheet
+      </a>
     </p>
   `;
 
@@ -255,14 +367,14 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
 
   await transporter.sendMail({
     from:    `Amazon Checker <${GMAIL_USER}>`,
-    to:      NOTIFY_EMAIL,
+    to:      GMAIL_USER,
     subject: issues.length === 0
-      ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE`
-      : `⚠️ Amazon Check — ${issues.length} issue(s) found`,
+      ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
+      : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`,
     html,
   });
 
-  console.log(`   📧 Email sent to ${NOTIFY_EMAIL}`);
+  console.log(`   📧 Email sent to ${GMAIL_USER}`);
 }
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
@@ -277,13 +389,17 @@ async function main() {
   console.log(`  🚀  Amazon Listing Check — ${muTime()}`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  const sheets  = await getSheetsClient();
+  const sheets = await getSheetsClient();
+
+  // Apply clean conditional formatting to all tabs automatically
+  await applyConditionalFormatting(sheets);
+
   const allTabs = await getTabNames(sheets);
 
   let totalChecked = 0;
   let totalBlocked = 0;
   let totalErrors  = 0;
-  const summary    = []; // collects all results for the email
+  const summary    = [];
 
   for (const tabName of allTabs) {
     if (SKIP_SHEETS.includes(tabName)) continue;
@@ -334,7 +450,7 @@ async function main() {
       const mobile = await checkPage(browser, url, true);
       await sleep(randomDelay());
 
-      // Determine overall status
+      // Overall status
       let alert = '';
       let notes = '';
 
@@ -359,7 +475,7 @@ async function main() {
         `| ${alert}`
       );
 
-      // D:J — 7 columns
+      // D:J (7 columns)
       const dToJ = [
         desktop.atc,   // D — Desktop ATC
         desktop.buy,   // E — Desktop Buy
@@ -370,20 +486,19 @@ async function main() {
         url,           // J — URL
       ];
 
-      // L:M — 2 columns (K = Manual Check Notes is skipped)
+      // L:M (2 columns, K skipped)
       const lToM = [
         desktop.stock, // L — Stock Status
         alert,         // M — Alert
       ];
 
-      // Write immediately — live row-by-row update in the sheet
+      // Write immediately — live row-by-row update
       try {
         await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
       } catch (err) {
         console.log(`      ⚠ Sheet write failed for ${asin}: ${err.message}`);
       }
 
-      // Add to summary for email
       summary.push({ marketplace: tabName, asin, alert, notes });
       totalChecked++;
     }
@@ -399,7 +514,6 @@ async function main() {
   if (totalErrors  > 0) console.log(`  ❌  ${totalErrors} errors`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  // Send email summary
   console.log('📧 Sending email summary...');
   await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime);
 }
