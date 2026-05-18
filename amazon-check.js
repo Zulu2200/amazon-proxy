@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //  AMAZON LISTING CHECKER — Puppeteer + Google Sheets
 //  Runs via GitHub Actions daily at 1am Mauritius time
+//  Can also be triggered from Google Sheet for a single marketplace
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const puppeteer  = require('puppeteer');
@@ -8,13 +9,14 @@ const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────────
-const SHEET_ID     = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
-const PROXY_USER   = process.env.PROXY_USER;
-const PROXY_PASS   = process.env.PROXY_PASS;
-const GMAIL_USER   = process.env.GMAIL_USER;
-const GMAIL_PASS   = process.env.GMAIL_PASS;
-const SKIP_SHEETS  = ['Summary', 'Template', 'Instructions', 'History'];
-const HISTORY_TAB  = 'History';
+const SHEET_ID      = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
+const PROXY_USER    = process.env.PROXY_USER;
+const PROXY_PASS    = process.env.PROXY_PASS;
+const GMAIL_USER    = process.env.GMAIL_USER;
+const GMAIL_PASS    = process.env.GMAIL_PASS;
+const ONLY_TAB      = (process.env.MARKETPLACE || '').trim(); // blank = run all
+const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions', 'History'];
+const HISTORY_TAB   = 'History';
 
 // Random delay 3–8 seconds — mimics human browsing
 const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
@@ -48,9 +50,9 @@ const MARKETPLACES = {
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
 const COLOR = {
-  green: { red: 0.714, green: 0.843, blue: 0.659 }, // #B6D7A8
-  red:   { red: 0.918, green: 0.600, blue: 0.600 }, // #EA9999
-  amber: { red: 1.000, green: 0.898, blue: 0.600 }, // #FFE599
+  green: { red: 0.714, green: 0.843, blue: 0.659 },
+  red:   { red: 0.918, green: 0.600, blue: 0.600 },
+  amber: { red: 1.000, green: 0.898, blue: 0.600 },
 };
 
 // ─── GOOGLE SHEETS CLIENT ──────────────────────────────────────────────────────
@@ -103,16 +105,13 @@ async function applyConditionalFormatting(sheets) {
       },
     });
 
-    // Button columns D:G — match on the word, emoji doesn't affect TEXT_CONTAINS
     addRequests.push(rule([buttonRange], 'Found',                 COLOR.green));
     addRequests.push(rule([buttonRange], 'Missing',               COLOR.red));
     addRequests.push(rule([buttonRange], 'BLOCKED',               COLOR.amber));
     addRequests.push(rule([buttonRange], 'Error',                 COLOR.amber));
-    // Stock Status L
     addRequests.push(rule([stockRange],  'In Stock',              COLOR.green));
     addRequests.push(rule([stockRange],  'left in sto',           COLOR.amber));
     addRequests.push(rule([stockRange],  'Currently unavailable', COLOR.red));
-    // Alert M
     addRequests.push(rule([alertRange],  'LIVE',                  COLOR.green));
     addRequests.push(rule([alertRange],  'NO BUTTONS',            COLOR.red));
     addRequests.push(rule([alertRange],  'BLOCKED',               COLOR.amber));
@@ -135,7 +134,7 @@ async function applyConditionalFormatting(sheets) {
   console.log('✅ Conditional formatting applied\n');
 }
 
-// ─── ENSURE HISTORY TAB EXISTS WITH HEADERS ────────────────────────────────────
+// ─── ENSURE HISTORY TAB EXISTS ─────────────────────────────────────────────────
 async function ensureHistoryTab(sheets) {
   const meta   = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   const exists = meta.data.sheets.some(s => s.properties.title === HISTORY_TAB);
@@ -155,7 +154,7 @@ async function ensureHistoryTab(sheets) {
   }
 }
 
-// ─── APPEND ROWS TO HISTORY TAB ────────────────────────────────────────────────
+// ─── APPEND TO HISTORY TAB ─────────────────────────────────────────────────────
 async function appendToHistory(sheets, historyRows) {
   if (historyRows.length === 0) return;
 
@@ -193,7 +192,6 @@ async function getASINs(sheets, tabName) {
 }
 
 // ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
-// D:J and L:M — column K (Manual Check Notes) is NEVER touched
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -315,12 +313,14 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     </tr>`
   ).join('');
 
+  const scope = ONLY_TAB ? `${ONLY_TAB} only` : 'all 16 marketplaces';
+
   const html = `
     <h2 style="color:#333;font-family:Arial,sans-serif">
       Amazon Listing Check — ${muTime()}
     </h2>
     <p style="font-family:Arial,sans-serif">
-      ✅ <strong>${totalChecked}</strong> ASINs checked across 16 marketplaces<br>
+      ✅ <strong>${totalChecked}</strong> ASINs checked (${scope})<br>
       ⏱ Completed in <strong>${duration} minutes</strong><br>
       ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked by Amazon<br>` : ''}
       ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`           : ''}
@@ -377,7 +377,11 @@ async function main() {
   const startTime = Date.now();
 
   console.log(`\n${'═'.repeat(60)}`);
-  console.log(`  🚀  Amazon Listing Check — ${muTime()}`);
+  if (ONLY_TAB) {
+    console.log(`  🚀  Amazon Check — ${ONLY_TAB} only — ${muTime()}`);
+  } else {
+    console.log(`  🚀  Amazon Check — ALL tabs — ${muTime()}`);
+  }
   console.log(`${'═'.repeat(60)}\n`);
 
   const sheets = await getSheetsClient();
@@ -398,6 +402,9 @@ async function main() {
 
   for (const tabName of allTabs) {
     if (SKIP_SHEETS.includes(tabName)) continue;
+
+    // ── If a specific marketplace was requested, skip all others ──────────────
+    if (ONLY_TAB && tabName !== ONLY_TAB) continue;
 
     const marketplace = MARKETPLACES[tabName];
     if (!marketplace) {
@@ -468,19 +475,11 @@ async function main() {
       );
 
       const dToJ = [
-        desktop.atc,  // D — Desktop ATC
-        desktop.buy,  // E — Desktop Buy
-        mobile.atc,   // F — Mobile ATC
-        mobile.buy,   // G — Mobile Buy
-        notes,        // H — Notes
-        checkedAt,    // I — Last Checked
-        url,          // J — URL
+        desktop.atc, desktop.buy, mobile.atc, mobile.buy,
+        notes, checkedAt, url,
       ];
 
-      const lToM = [
-        desktop.stock, // L — Stock Status
-        alert,         // M — Alert
-      ];
+      const lToM = [desktop.stock, alert];
 
       try {
         await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
