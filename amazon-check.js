@@ -14,19 +14,63 @@ const PROXY_USER    = process.env.PROXY_USER;
 const PROXY_PASS    = process.env.PROXY_PASS;
 const GMAIL_USER    = process.env.GMAIL_USER;
 const GMAIL_PASS    = process.env.GMAIL_PASS;
-const ONLY_TAB      = (process.env.MARKETPLACE || '').trim(); // blank = run all
+const ONLY_TAB      = (process.env.MARKETPLACE || '').trim();
 const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions', 'History'];
 const HISTORY_TAB   = 'History';
 
 // Random delay 3–8 seconds — mimics human browsing
 const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
 
+// ─── UNAVAILABLE PHRASES (all 16 Amazon languages) ────────────────────────────
+// If any of these appear in the #availability element, the listing is unavailable
+const UNAVAILABLE_PHRASES = [
+  // English
+  'currently unavailable',
+  'not available',
+  'this item is unavailable',
+  // German
+  'derzeit nicht verfügbar',
+  'nicht auf lager',
+  'nicht verfügbar',
+  // French
+  'actuellement indisponible',
+  'non disponible',
+  'en rupture de stock',
+  // Spanish
+  'actualmente no disponible',
+  'no disponible',
+  'agotado',
+  // Italian
+  'attualmente non disponibile',
+  'non disponibile',
+  'esaurito',
+  // Dutch
+  'momenteel niet beschikbaar',
+  'niet beschikbaar',
+  'uitverkocht',
+  // Polish
+  'obecnie niedostępny',
+  'niedostępny',
+  'chwilowo niedostępny',
+  // Swedish
+  'för tillfället inte tillgänglig',
+  'inte tillgänglig',
+  'slut i lager',
+  // Portuguese (Brazil)
+  'atualmente indisponível',
+  'indisponível',
+  'sem estoque',
+  // Arabic (Saudi/UAE)
+  'غير متوفر حاليا',
+  'غير متوفر',
+];
+
 // ─── COLUMN LAYOUT ─────────────────────────────────────────────────────────────
-// A(0)=Category, B(1)=ASIN, C(2)=SKU,
-// D(3)=Desktop ATC, E(4)=Desktop Buy, F(5)=Mobile ATC, G(6)=Mobile Buy,
-// H(7)=Notes, I(8)=Last Checked, J(9)=URL,
-// K(10)=Manual Check Notes ← NEVER OVERWRITTEN,
-// L(11)=Stock Status, M(12)=Alert
+// A=Category, B=ASIN, C=SKU,
+// D=Desktop ATC, E=Desktop Buy, F=Mobile ATC, G=Mobile Buy,
+// H=Notes, I=Last Checked, J=URL,
+// K=Manual Check Notes ← READ ONLY, never overwritten, never used for logic
+// L=Stock Status, M=Alert
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
@@ -114,6 +158,7 @@ async function applyConditionalFormatting(sheets) {
     addRequests.push(rule([stockRange],  'Currently unavailable', COLOR.red));
     addRequests.push(rule([alertRange],  'LIVE',                  COLOR.green));
     addRequests.push(rule([alertRange],  'NO BUTTONS',            COLOR.red));
+    addRequests.push(rule([alertRange],  'UNAVAILABLE',           COLOR.red));
     addRequests.push(rule([alertRange],  'BLOCKED',               COLOR.amber));
     addRequests.push(rule([alertRange],  'ERROR',                 COLOR.amber));
   }
@@ -175,7 +220,8 @@ async function getTabNames(sheets) {
   return meta.data.sheets.map(s => s.properties.title);
 }
 
-// ─── READ ASINs AND SKUs FROM COLUMNS B & C ────────────────────────────────────
+// ─── READ ASINs AND SKUs FROM COLUMNS B & C ONLY ──────────────────────────────
+// Column K (Manual Check Notes) is never read — it's purely for your own use
 async function getASINs(sheets, tabName) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -192,6 +238,7 @@ async function getASINs(sheets, tabName) {
 }
 
 // ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
+// Writes D:J and L:M — column K (Manual Check Notes) is NEVER touched
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -244,6 +291,7 @@ async function checkPage(browser, url, isMobile) {
       { timeout: 8000 }
     ).catch(() => {});
 
+    // ── CAPTCHA / block ────────────────────────────────────────────────────────
     const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(
       () => (document.body ? document.body.innerText.substring(0, 600) : '')
@@ -255,39 +303,68 @@ async function checkPage(browser, url, isMobile) {
     );
 
     if (isBlocked) {
-      return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true };
+      return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
     }
 
-    const hasATC = await page.evaluate(() => !!(
-      document.querySelector('#add-to-cart-button')         ||
-      document.querySelector('[name="submit.add-to-cart"]') ||
-      document.querySelector('[data-action="add-to-cart"]') ||
-      document.querySelector('[id*="add-to-cart"]')
+    // ── UNAVAILABILITY CHECK (language-independent) ────────────────────────────
+    const availabilityText = await page.evaluate(() => {
+      const el = document.querySelector('#availability, #availability_feature_div');
+      return el ? el.innerText.toLowerCase().trim() : '';
+    }).catch(() => '');
+
+    // Also check if the purchase box is entirely absent from the page
+    const hasPurchaseBox = await page.evaluate(() => !!(
+      document.querySelector('#buybox')             ||
+      document.querySelector('#desktop_buybox')     ||
+      document.querySelector('#newAccordionRow')     ||
+      document.querySelector('#add-to-cart-button') ||
+      document.querySelector('#buy-now-button')
     )).catch(() => false);
 
-    const hasBuy = await page.evaluate(() => !!(
-      document.querySelector('#buy-now-button')         ||
-      document.querySelector('[name="submit.buy-now"]') ||
-      document.querySelector('[data-action="buy-now"]') ||
-      document.querySelector('[id*="buy-now"]')
-    )).catch(() => false);
+    const isUnavailable = (
+      UNAVAILABLE_PHRASES.some(phrase => availabilityText.includes(phrase)) ||
+      !hasPurchaseBox
+    );
 
+    if (isUnavailable) {
+      return {
+        atc:           'Missing ❌',
+        buy:           'Missing ❌',
+        stock:         availabilityText.substring(0, 60) || 'Unavailable',
+        isBlocked:     false,
+        isUnavailable: true,
+      };
+    }
+
+    // ── TIGHTENED BUTTON DETECTION ─────────────────────────────────────────────
+    // Only exact IDs — never wildcards — to avoid false positives from
+    // wishlist, registry, or other non-purchase buttons on the page
+    const hasATC = await page.evaluate(() =>
+      !!(document.querySelector('#add-to-cart-button'))
+    ).catch(() => false);
+
+    const hasBuy = await page.evaluate(() =>
+      !!(document.querySelector('#buy-now-button'))
+    ).catch(() => false);
+
+    // ── STOCK TEXT ─────────────────────────────────────────────────────────────
     const stockText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
     }).catch(() => '');
 
     return {
-      atc:       hasATC ? 'Found ✅' : 'Missing ❌',
-      buy:       hasBuy ? 'Found ✅' : 'Missing ❌',
-      stock:     stockText.substring(0, 60),
-      isBlocked: false,
+      atc:           hasATC ? 'Found ✅' : 'Missing ❌',
+      buy:           hasBuy ? 'Found ✅' : 'Missing ❌',
+      stock:         stockText.substring(0, 60),
+      isBlocked:     false,
+      isUnavailable: false,
     };
 
   } catch (err) {
     const msg = (err.message || '').substring(0, 60);
     console.log(`      ⚠ Page error: ${msg}`);
-    return { atc: 'Error', buy: 'Error', stock: msg, isBlocked: false };
+    return { atc: 'Error', buy: 'Error', stock: msg, isBlocked: false, isUnavailable: false };
 
   } finally {
     await page.close().catch(() => {});
@@ -313,7 +390,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     </tr>`
   ).join('');
 
-  const scope = ONLY_TAB ? `${ONLY_TAB} only` : 'all 16 marketplaces';
+  const scope = ONLY_TAB ? `${ONLY_TAB} only` : 'all marketplaces';
 
   const html = `
     <h2 style="color:#333;font-family:Arial,sans-serif">
@@ -377,11 +454,10 @@ async function main() {
   const startTime = Date.now();
 
   console.log(`\n${'═'.repeat(60)}`);
-  if (ONLY_TAB) {
-    console.log(`  🚀  Amazon Check — ${ONLY_TAB} only — ${muTime()}`);
-  } else {
-    console.log(`  🚀  Amazon Check — ALL tabs — ${muTime()}`);
-  }
+  console.log(ONLY_TAB
+    ? `  🚀  Amazon Check — ${ONLY_TAB} only — ${muTime()}`
+    : `  🚀  Amazon Check — ALL tabs — ${muTime()}`
+  );
   console.log(`${'═'.repeat(60)}\n`);
 
   const sheets = await getSheetsClient();
@@ -402,8 +478,6 @@ async function main() {
 
   for (const tabName of allTabs) {
     if (SKIP_SHEETS.includes(tabName)) continue;
-
-    // ── If a specific marketplace was requested, skip all others ──────────────
     if (ONLY_TAB && tabName !== ONLY_TAB) continue;
 
     const marketplace = MARKETPLACES[tabName];
@@ -450,6 +524,7 @@ async function main() {
       const mobile = await checkPage(browser, url, true);
       await sleep(randomDelay());
 
+      // ── Alert status — based purely on what Amazon's page shows ──────────────
       let alert = '';
       let notes = '';
 
@@ -461,6 +536,9 @@ async function main() {
         alert = '⚠️ ERROR';
         notes = desktop.stock;
         totalErrors++;
+      } else if (desktop.isUnavailable) {
+        alert = '🔴 UNAVAILABLE';
+        notes = desktop.stock || 'Listing unavailable';
       } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
         alert = '✅ LIVE';
       } else {
