@@ -13,12 +13,13 @@ const PROXY_USER   = process.env.PROXY_USER;
 const PROXY_PASS   = process.env.PROXY_PASS;
 const GMAIL_USER   = process.env.GMAIL_USER;
 const GMAIL_PASS   = process.env.GMAIL_PASS;
-const SKIP_SHEETS  = ['Summary', 'Template', 'Instructions'];
+const SKIP_SHEETS  = ['Summary', 'Template', 'Instructions', 'History'];
+const HISTORY_TAB  = 'History';
 
 // Random delay 3–8 seconds — mimics human browsing
 const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
 
-// ─── COLUMN LAYOUT (0-based index for API, 1-based letter for reference) ───────
+// ─── COLUMN LAYOUT ─────────────────────────────────────────────────────────────
 // A(0)=Category, B(1)=ASIN, C(2)=SKU,
 // D(3)=Desktop ATC, E(4)=Desktop Buy, F(5)=Mobile ATC, G(6)=Mobile Buy,
 // H(7)=Notes, I(8)=Last Checked, J(9)=URL,
@@ -45,12 +46,11 @@ const MARKETPLACES = {
   'UAE':          { baseUrl: 'https://www.amazon.ae',     proxy: '82.29.239.167:5315'  },
 };
 
-// ─── COLORS ───────────────────────────────────────────────────────────────────
+// ─── COLORS ────────────────────────────────────────────────────────────────────
 const COLOR = {
-  green:      { red: 0.714, green: 0.843, blue: 0.659 }, // #B6D7A8 — Found / LIVE
-  red:        { red: 0.918, green: 0.600, blue: 0.600 }, // #EA9999 — Missing / NO BUTTONS
-  amber:      { red: 1.000, green: 0.898, blue: 0.600 }, // #FFE599 — Blocked / Error / Low stock
-  white:      { red: 1.000, green: 1.000, blue: 1.000 }, // reset background
+  green: { red: 0.714, green: 0.843, blue: 0.659 }, // #B6D7A8
+  red:   { red: 0.918, green: 0.600, blue: 0.600 }, // #EA9999
+  amber: { red: 1.000, green: 0.898, blue: 0.600 }, // #FFE599
 };
 
 // ─── GOOGLE SHEETS CLIENT ──────────────────────────────────────────────────────
@@ -64,12 +64,9 @@ async function getSheetsClient() {
 }
 
 // ─── APPLY CONDITIONAL FORMATTING TO ALL TABS ──────────────────────────────────
-// Clears old rules, then adds clean colour rules across all 16 marketplace tabs.
-// Runs automatically at the start of every check — no manual work needed.
 async function applyConditionalFormatting(sheets) {
   console.log('🎨 Setting up conditional formatting on all tabs...');
 
-  // Get full spreadsheet metadata including existing conditional format rules
   const meta = await sheets.spreadsheets.get({
     spreadsheetId: SHEET_ID,
     fields: 'sheets(properties(sheetId,title),conditionalFormats)',
@@ -82,47 +79,23 @@ async function applyConditionalFormatting(sheets) {
     const tabName = sheet.properties.title;
     if (SKIP_SHEETS.includes(tabName) || !MARKETPLACES[tabName]) continue;
 
-    const sheetId        = sheet.properties.sheetId;
-    const existingRules  = sheet.conditionalFormats || [];
+    const sheetId       = sheet.properties.sheetId;
+    const existingRules = sheet.conditionalFormats || [];
 
-    // Delete ALL existing conditional format rules for this tab (reverse order)
     for (let i = existingRules.length - 1; i >= 0; i--) {
       deleteRequests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
     }
 
-    // ── Define ranges ──────────────────────────────────────────────────────────
-    // D:G — button columns (startRowIndex:1 = skip header row 1)
-    const buttonRange = {
-      sheetId,
-      startRowIndex:    1,
-      startColumnIndex: 3,  // D
-      endColumnIndex:   7,  // up to but not including H
-    };
-    // L — Stock Status
-    const stockRange = {
-      sheetId,
-      startRowIndex:    1,
-      startColumnIndex: 11, // L
-      endColumnIndex:   12,
-    };
-    // M — Alert
-    const alertRange = {
-      sheetId,
-      startRowIndex:    1,
-      startColumnIndex: 12, // M
-      endColumnIndex:   13,
-    };
+    const buttonRange = { sheetId, startRowIndex: 1, startColumnIndex: 3,  endColumnIndex: 7  };
+    const stockRange  = { sheetId, startRowIndex: 1, startColumnIndex: 11, endColumnIndex: 12 };
+    const alertRange  = { sheetId, startRowIndex: 1, startColumnIndex: 12, endColumnIndex: 13 };
 
-    // ── Helper to build a rule request ────────────────────────────────────────
     const rule = (ranges, containsText, bgColor) => ({
       addConditionalFormatRule: {
         rule: {
           ranges,
           booleanRule: {
-            condition: {
-              type:   'TEXT_CONTAINS',
-              values: [{ userEnteredValue: containsText }],
-            },
+            condition: { type: 'TEXT_CONTAINS', values: [{ userEnteredValue: containsText }] },
             format: { backgroundColor: bgColor },
           },
         },
@@ -130,33 +103,25 @@ async function applyConditionalFormatting(sheets) {
       },
     });
 
-    // ── Button columns D:G ─────────────────────────────────────────────────────
-    addRequests.push(rule([buttonRange], 'Found',   COLOR.green));
-    addRequests.push(rule([buttonRange], 'Missing', COLOR.red));
-    addRequests.push(rule([buttonRange], 'BLOCKED', COLOR.amber));
-    addRequests.push(rule([buttonRange], 'Error',   COLOR.amber));
-
-    // ── Stock Status (L) — amber only for low stock warnings ──────────────────
-    addRequests.push(rule([stockRange], 'left in sto', COLOR.amber)); // "Only X left in stock"
-    addRequests.push(rule([stockRange], 'Currently unavailable', COLOR.red));
-    addRequests.push(rule([stockRange], 'In Stock', COLOR.green));
-
-    // ── Alert column (M) ──────────────────────────────────────────────────────
-    addRequests.push(rule([alertRange], 'LIVE',       COLOR.green));
-    addRequests.push(rule([alertRange], 'NO BUTTONS', COLOR.red));
-    addRequests.push(rule([alertRange], 'BLOCKED',    COLOR.amber));
-    addRequests.push(rule([alertRange], 'ERROR',      COLOR.amber));
+    addRequests.push(rule([buttonRange], 'Found',                  COLOR.green));
+    addRequests.push(rule([buttonRange], 'Missing',                COLOR.red));
+    addRequests.push(rule([buttonRange], 'BLOCKED',                COLOR.amber));
+    addRequests.push(rule([buttonRange], 'Error',                  COLOR.amber));
+    addRequests.push(rule([stockRange],  'In Stock',               COLOR.green));
+    addRequests.push(rule([stockRange],  'left in sto',            COLOR.amber));
+    addRequests.push(rule([stockRange],  'Currently unavailable',  COLOR.red));
+    addRequests.push(rule([alertRange],  'LIVE',                   COLOR.green));
+    addRequests.push(rule([alertRange],  'NO BUTTONS',             COLOR.red));
+    addRequests.push(rule([alertRange],  'BLOCKED',                COLOR.amber));
+    addRequests.push(rule([alertRange],  'ERROR',                  COLOR.amber));
   }
 
-  // Send delete requests first (clears old rules)
   if (deleteRequests.length > 0) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
       requestBody: { requests: deleteRequests },
     });
   }
-
-  // Then send add requests (applies new clean rules)
   if (addRequests.length > 0) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
@@ -164,7 +129,51 @@ async function applyConditionalFormatting(sheets) {
     });
   }
 
-  console.log('✅ Conditional formatting applied to all 16 tabs\n');
+  console.log('✅ Conditional formatting applied\n');
+}
+
+// ─── ENSURE HISTORY TAB EXISTS WITH HEADERS ────────────────────────────────────
+async function ensureHistoryTab(sheets) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const exists = meta.data.sheets.some(s => s.properties.title === HISTORY_TAB);
+
+  if (!exists) {
+    // Create the History tab
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: HISTORY_TAB } } }],
+      },
+    });
+    console.log('📋 Created History tab');
+
+    // Add header row
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `'${HISTORY_TAB}'!A1:G1`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes']],
+      },
+    });
+    console.log('📋 History tab headers added\n');
+  }
+}
+
+// ─── APPEND ROWS TO HISTORY TAB ────────────────────────────────────────────────
+// Only logs ASINs that are NOT fully LIVE — builds up a searchable problem log
+async function appendToHistory(sheets, historyRows) {
+  if (historyRows.length === 0) return;
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: `'${HISTORY_TAB}'!A:G`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: historyRows },
+  });
+
+  console.log(`   📋 ${historyRows.length} issue(s) logged to History tab`);
 }
 
 // ─── GET ALL TAB NAMES ─────────────────────────────────────────────────────────
@@ -173,18 +182,19 @@ async function getTabNames(sheets) {
   return meta.data.sheets.map(s => s.properties.title);
 }
 
-// ─── READ ASINs FROM COLUMN B (skipping header row 1) ─────────────────────────
+// ─── READ ASINs AND SKUs FROM COLUMNS B & C ────────────────────────────────────
 async function getASINs(sheets, tabName) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${tabName}'!B:B`,  // Column B = ASIN
+    range: `'${tabName}'!B:C`,  // B=ASIN, C=SKU
   });
   const rows = res.data.values || [];
   const asins = [];
   for (let i = 1; i < rows.length; i++) {
     const asin = (rows[i][0] || '').trim();
+    const sku  = (rows[i][1] || '').trim();
     if (asin) {
-      asins.push({ asin, sheetRow: i + 1 });
+      asins.push({ asin, sku, sheetRow: i + 1 });
     }
   }
   return asins;
@@ -198,14 +208,8 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
     requestBody: {
       valueInputOption: 'USER_ENTERED',
       data: [
-        {
-          range:  `'${tabName}'!D${sheetRow}:J${sheetRow}`,
-          values: [dToJ],  // D, E, F, G, H, I, J
-        },
-        {
-          range:  `'${tabName}'!L${sheetRow}:M${sheetRow}`,
-          values: [lToM],  // L, M  (skipping K)
-        },
+        { range: `'${tabName}'!D${sheetRow}:J${sheetRow}`, values: [dToJ] },
+        { range: `'${tabName}'!L${sheetRow}:M${sheetRow}`, values: [lToM] },
       ],
     },
   });
@@ -218,7 +222,6 @@ async function checkPage(browser, url, isMobile) {
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
 
-    // Hide the automation flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       window.chrome = { runtime: {} };
@@ -251,7 +254,6 @@ async function checkPage(browser, url, isMobile) {
       { timeout: 8000 }
     ).catch(() => {});
 
-    // Check for CAPTCHA / block
     const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(
       () => (document.body ? document.body.innerText.substring(0, 600) : '')
@@ -266,7 +268,6 @@ async function checkPage(browser, url, isMobile) {
       return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true };
     }
 
-    // Check for Add to Cart button
     const hasATC = await page.evaluate(() => !!(
       document.querySelector('#add-to-cart-button')         ||
       document.querySelector('[name="submit.add-to-cart"]') ||
@@ -274,7 +275,6 @@ async function checkPage(browser, url, isMobile) {
       document.querySelector('[id*="add-to-cart"]')
     )).catch(() => false);
 
-    // Check for Buy Now button
     const hasBuy = await page.evaluate(() => !!(
       document.querySelector('#buy-now-button')         ||
       document.querySelector('[name="submit.buy-now"]') ||
@@ -282,7 +282,6 @@ async function checkPage(browser, url, isMobile) {
       document.querySelector('[id*="buy-now"]')
     )).catch(() => false);
 
-    // Get stock / availability text
     const stockText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
@@ -318,6 +317,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     `<tr>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.asin}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.sku}</td>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.alert}</td>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.notes || ''}</td>
     </tr>`
@@ -345,6 +345,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
            <tr style="background:#f0f0f0">
              <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
              <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
+             <th style="padding:4px 8px;border:1px solid #ddd">SKU</th>
              <th style="padding:4px 8px;border:1px solid #ddd">Status</th>
              <th style="padding:4px 8px;border:1px solid #ddd">Notes</th>
            </tr>
@@ -353,7 +354,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     }
 
     <p style="margin-top:24px;font-family:Arial,sans-serif">
-      <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}" 
+      <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}"
          style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">
         Open Google Sheet
       </a>
@@ -391,15 +392,21 @@ async function main() {
 
   const sheets = await getSheetsClient();
 
-  // Apply clean conditional formatting to all tabs automatically
+  // Setup: formatting + history tab
   await applyConditionalFormatting(sheets);
+  await ensureHistoryTab(sheets);
 
   const allTabs = await getTabNames(sheets);
 
-  let totalChecked = 0;
-  let totalBlocked = 0;
-  let totalErrors  = 0;
-  const summary    = [];
+  let totalChecked  = 0;
+  let totalBlocked  = 0;
+  let totalErrors   = 0;
+  const summary     = [];
+  const historyRows = []; // collects problem rows to append to History tab at end
+
+  // Today's date for the history log
+  const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
+  const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
 
   for (const tabName of allTabs) {
     if (SKIP_SHEETS.includes(tabName)) continue;
@@ -436,21 +443,18 @@ async function main() {
       ],
     });
 
-    for (const { asin, sheetRow } of asins) {
+    for (const { asin, sku, sheetRow } of asins) {
       const url       = `${marketplace.baseUrl}/dp/${asin}`;
       const checkedAt = muTime();
 
       process.stdout.write(`   ${asin}  `);
 
-      // Desktop check
       const desktop = await checkPage(browser, url, false);
       await sleep(randomDelay());
 
-      // Mobile check
       const mobile = await checkPage(browser, url, true);
       await sleep(randomDelay());
 
-      // Overall status
       let alert = '';
       let notes = '';
 
@@ -475,37 +479,38 @@ async function main() {
         `| ${alert}`
       );
 
-      // D:J (7 columns)
+      // D:J
       const dToJ = [
-        desktop.atc,   // D — Desktop ATC
-        desktop.buy,   // E — Desktop Buy
-        mobile.atc,    // F — Mobile ATC
-        mobile.buy,    // G — Mobile Buy
-        notes,         // H — Notes
-        checkedAt,     // I — Last Checked
-        url,           // J — URL
+        desktop.atc, desktop.buy, mobile.atc, mobile.buy,
+        notes, checkedAt, url,
       ];
 
-      // L:M (2 columns, K skipped)
-      const lToM = [
-        desktop.stock, // L — Stock Status
-        alert,         // M — Alert
-      ];
+      // L:M (K skipped)
+      const lToM = [desktop.stock, alert];
 
-      // Write immediately — live row-by-row update
+      // Write to sheet immediately
       try {
         await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
       } catch (err) {
         console.log(`      ⚠ Sheet write failed for ${asin}: ${err.message}`);
       }
 
-      summary.push({ marketplace: tabName, asin, alert, notes });
+      // If NOT fully LIVE — add to history log
+      if (alert !== '✅ LIVE') {
+        historyRows.push([today, now, tabName, asin, sku, alert, notes]);
+      }
+
+      summary.push({ marketplace: tabName, asin, sku, alert, notes });
       totalChecked++;
     }
 
     await browser.close().catch(() => {});
     console.log(`\n   ✅ ${tabName} complete`);
   }
+
+  // Append all problem rows to the History tab in one shot
+  console.log(`\n📋 Writing to History tab...`);
+  await appendToHistory(sheets, historyRows);
 
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`  ✅  All done — ${muTime()}`);
