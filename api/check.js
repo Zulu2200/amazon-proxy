@@ -1,3 +1,6 @@
+import fetch from 'node-fetch';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+
 export default async function handler(req, res) {
   const { asin, marketplace, token } = req.query;
 
@@ -9,17 +12,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing asin or marketplace' });
   }
 
-  // ── Load undici dynamically ───────────────────────────────
-  let ProxyAgent, proxyFetch;
-  try {
-    const undici = await import('undici');
-    ProxyAgent = undici.ProxyAgent;
-    proxyFetch = undici.fetch;
-  } catch (e) {
-    return res.status(200).json({ error: 'Failed to load undici: ' + e.message });
-  }
-
-  // ── Proxy map — one residential IP per marketplace ────────
+  // ── Proxy map ─────────────────────────────────────────────
   const proxyMap = {
     USA:            '9.142.43.131:5301',
     US:             '9.142.43.131:5301',
@@ -65,43 +58,36 @@ export default async function handler(req, res) {
   const proxyUser = process.env.PROXY_USER;
   const proxyPass = process.env.PROXY_PASS;
 
-  let dispatcher = undefined;
+  let agent = undefined;
   if (proxyHost && proxyUser && proxyPass) {
-    try {
-      dispatcher = new ProxyAgent({
-        uri: `http://${proxyUser}:${proxyPass}@${proxyHost}`,
-      });
-    } catch (e) {
-      return res.status(200).json({ error: 'Proxy agent failed: ' + e.message });
-    }
+    agent = new HttpsProxyAgent(
+      `http://${proxyUser}:${proxyPass}@${proxyHost}`
+    );
   }
 
-  // ── DIAGNOSTIC MODE — test if proxy works ─────────────────
+  // ── DIAGNOSTIC MODE ───────────────────────────────────────
   if (asin === 'IPTEST') {
     try {
-      const opts = { 
+      const opts = {
         headers: { 'User-Agent': 'Mozilla/5.0' },
       };
-      if (dispatcher) opts.dispatcher = dispatcher;
-      
-      const ipResp = await proxyFetch('https://api.ipify.org?format=json', opts);
+      if (agent) opts.agent = agent;
+
+      const ipResp = await fetch('https://api.ipify.org?format=json', opts);
       const ipData = await ipResp.json();
       return res.status(200).json({
         success: true,
         proxyHost: proxyHost || 'none',
         hasCredentials: !!(proxyUser && proxyPass),
         visibleIP: ipData.ip,
-        usingProxy: !!dispatcher,
-        marketplace: marketplace,
+        usingProxy: !!agent,
+        marketplace,
       });
     } catch (e) {
       return res.status(200).json({
         success: false,
-        proxyHost: proxyHost || 'none',
-        hasCredentials: !!(proxyUser && proxyPass),
         error: e.message,
-        usingProxy: !!dispatcher,
-        marketplace: marketplace,
+        proxyHost: proxyHost || 'none',
       });
     }
   }
@@ -152,7 +138,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Unknown marketplace: ' + marketplace });
   }
 
-  // ── Country-specific Accept-Language ──────────────────────
+  // ── Language headers ──────────────────────────────────────
   const langMap = {
     'amazon.de':     'de-DE,de;q=0.9',
     'amazon.fr':     'fr-FR,fr;q=0.9',
@@ -171,33 +157,61 @@ export default async function handler(req, res) {
   const productUrl = `https://www.${domain}/dp/${asin}`;
   const aodUrl     = `https://www.${domain}/gp/product/ajax/?asin=${asin}&experienceId=aodAjaxMain&deviceType=web`;
 
-  const desktopUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-  const mobileUA  = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+  // ── Browser-mimicking headers ─────────────────────────────
+  const desktopHeaders = {
+    'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': acceptLang,
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control':   'max-age=0',
+    'Connection':      'keep-alive',
+    'Sec-Ch-Ua':       '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-Ch-Ua-Mobile':'?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest':  'document',
+    'Sec-Fetch-Mode':  'navigate',
+    'Sec-Fetch-Site':  'none',
+    'Sec-Fetch-User':  '?1',
+    'Upgrade-Insecure-Requests': '1',
+  };
 
-  // ── Helper: fetch through proxy ───────────────────────────
-  async function fetchWithProxy(url, headers) {
+  const mobileHeaders = {
+    'User-Agent':      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': acceptLang,
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection':      'keep-alive',
+  };
+
+  const aodExtraHeaders = {
+    'Referer':          productUrl,
+    'X-Requested-With': 'XMLHttpRequest',
+    'Sec-Fetch-Dest':   'empty',
+    'Sec-Fetch-Mode':   'cors',
+    'Sec-Fetch-Site':   'same-origin',
+  };
+
+  // ── Fetch helper ──────────────────────────────────────────
+  async function fetchPage(url, headers, timeoutMs = 12000) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     const opts = {
-      signal: controller.signal,
+      signal:   controller.signal,
       headers,
-      maxRedirections: 5,
+      redirect: 'follow',
+      compress: true,
     };
-    if (dispatcher) opts.dispatcher = dispatcher;
+    if (agent) opts.agent = agent;
 
-    const resp = await proxyFetch(url, opts);
+    const resp = await fetch(url, opts);
     clearTimeout(timeout);
     return resp;
   }
 
   try {
-    // ── 1. Product page (desktop) — stock status ────────────
-    const productResp = await fetchWithProxy(productUrl, {
-      'User-Agent':      desktopUA,
-      'Accept-Language':  acceptLang,
-      'Accept':           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    });
+    // ── 1. Product page ─────────────────────────────────────
+    const productResp = await fetchPage(productUrl, desktopHeaders);
     const productBody = (await productResp.text()).toLowerCase();
 
     const blocked = productBody.includes('robot check') ||
@@ -241,24 +255,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── 2. AOD endpoint — Desktop ───────────────────────────
-    const aodDesktopResp = await fetchWithProxy(aodUrl, {
-      'User-Agent':       desktopUA,
-      'Accept-Language':  acceptLang,
-      'Accept':           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Referer':          productUrl,
-      'X-Requested-With': 'XMLHttpRequest',
-    });
+    // ── 2. AOD Desktop ──────────────────────────────────────
+    const aodDeskHeaders = { ...desktopHeaders, ...aodExtraHeaders };
+    const aodDesktopResp = await fetchPage(aodUrl, aodDeskHeaders);
     const aodDesktopBody = (await aodDesktopResp.text()).toLowerCase();
 
-    // ── 3. AOD endpoint — Mobile ────────────────────────────
-    const aodMobileResp = await fetchWithProxy(aodUrl, {
-      'User-Agent':       mobileUA,
-      'Accept-Language':  acceptLang,
-      'Accept':           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Referer':          productUrl,
-      'X-Requested-With': 'XMLHttpRequest',
-    });
+    // ── 3. AOD Mobile ───────────────────────────────────────
+    const aodMobHeaders = { ...mobileHeaders, ...aodExtraHeaders };
+    const aodMobileResp = await fetchPage(aodUrl, aodMobHeaders);
     const aodMobileBody = (await aodMobileResp.text()).toLowerCase();
 
     // ── Button detection ────────────────────────────────────
