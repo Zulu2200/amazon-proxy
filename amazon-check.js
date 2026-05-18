@@ -2,6 +2,7 @@
 //  AMAZON LISTING CHECKER — Puppeteer + Google Sheets
 //  Parallel execution — all marketplaces run simultaneously
 //  Saudi Arabia + UAE share an IP so they run sequentially
+//  Spain + Belgium have delivery location fix applied
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const puppeteer  = require('puppeteer');
@@ -18,10 +19,10 @@ const ONLY_TAB      = (process.env.MARKETPLACE || '').trim();
 const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions', 'History'];
 const HISTORY_TAB   = 'History';
 
-// These two share the same proxy IP — must run sequentially, not in parallel
+// These two share the same proxy IP — must run sequentially
 const SEQUENTIAL_GROUP = ['Saudi Arabia', 'UAE'];
 
-// Random delay 2–5 seconds between checks within a tab
+// Random delay 2–5 seconds between checks
 const randomDelay = () => Math.floor(Math.random() * 3000) + 2000;
 
 // ─── UNAVAILABLE PHRASES (all Amazon languages) ────────────────────────────────
@@ -39,6 +40,8 @@ const UNAVAILABLE_PHRASES = [
 ];
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
+// zipCode: set delivery location before checking — fixes proxy geolocation issues
+// Only Spain and Belgium have this for now — will expand after testing
 const MARKETPLACES = {
   'USA':          { baseUrl: 'https://www.amazon.com',    proxy: '9.142.43.131:5301'   },
   'Canada':       { baseUrl: 'https://www.amazon.ca',     proxy: '192.53.140.18:5114'  },
@@ -46,9 +49,9 @@ const MARKETPLACES = {
   'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  proxy: '212.212.18.216:6867' },
   'Germany':      { baseUrl: 'https://www.amazon.de',     proxy: '166.0.42.187:6195'   },
   'France':       { baseUrl: 'https://www.amazon.fr',     proxy: '31.98.4.142:7820'    },
-  'Belgium':      { baseUrl: 'https://www.amazon.com.be', proxy: '46.203.144.45:7812'  },
+  'Belgium':      { baseUrl: 'https://www.amazon.com.be', proxy: '46.203.144.45:7812',  zipCode: '1000' },
   'Netherlands':  { baseUrl: 'https://www.amazon.nl',     proxy: '104.253.199.5:5284'  },
-  'Spain':        { baseUrl: 'https://www.amazon.es',     proxy: '46.203.60.158:7158'  },
+  'Spain':        { baseUrl: 'https://www.amazon.es',     proxy: '46.203.60.158:7158',  zipCode: '28001' },
   'Italy':        { baseUrl: 'https://www.amazon.it',     proxy: '82.24.27.117:8089'   },
   'Sweden':       { baseUrl: 'https://www.amazon.se',     proxy: '82.26.114.47:6749'   },
   'Poland':       { baseUrl: 'https://www.amazon.pl',     proxy: '82.29.47.131:7855'   },
@@ -216,8 +219,43 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   });
 }
 
+// ─── SET DELIVERY LOCATION ─────────────────────────────────────────────────────
+// Tells Amazon which postcode to use for availability/buttons
+// Only called for marketplaces that have a zipCode defined
+async function setDeliveryLocation(page, baseUrl, zipCode) {
+  try {
+    // Step 1: Go to the homepage to get cookies/session
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+    // Step 2: Use Amazon's location change endpoint
+    await page.evaluate(async (baseUrl, zipCode) => {
+      await fetch(`${baseUrl}/portal-migration/hz/glow/address-change`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          locationType:   'LOCATION_INPUT',
+          zipCode:        zipCode,
+          storeContext:   'generic',
+          deviceType:     'web',
+          pageType:       'Gateway',
+          actionSource:   'glow',
+        }),
+        credentials: 'include',
+      });
+    }, baseUrl, zipCode);
+
+    // Wait a moment for Amazon to register the location
+    await sleep(1500);
+    console.log(`      📍 Delivery location set to ${zipCode}`);
+
+  } catch (err) {
+    // Non-fatal — if this fails, page check will still run
+    console.log(`      ⚠ Could not set delivery location: ${err.message}`);
+  }
+}
+
 // ─── CHECK A SINGLE AMAZON PAGE ────────────────────────────────────────────────
-async function checkPage(browser, url, isMobile) {
+async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
   const page = await browser.newPage();
 
   try {
@@ -248,6 +286,11 @@ async function checkPage(browser, url, isMobile) {
       'Accept-Encoding': 'gzip, deflate, br',
     });
 
+    // Set delivery location BEFORE loading the product page (Spain + Belgium only)
+    if (zipCode && !isMobile) {
+      await setDeliveryLocation(page, baseUrl, zipCode);
+    }
+
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     await page.waitForSelector(
@@ -255,6 +298,7 @@ async function checkPage(browser, url, isMobile) {
       { timeout: 8000 }
     ).catch(() => {});
 
+    // CAPTCHA check
     const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(
       () => (document.body ? document.body.innerText.substring(0, 600) : '')
@@ -269,6 +313,7 @@ async function checkPage(browser, url, isMobile) {
       return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
     }
 
+    // Unavailability check
     const availabilityText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.toLowerCase().trim() : '';
@@ -297,6 +342,7 @@ async function checkPage(browser, url, isMobile) {
       };
     }
 
+    // Tightened button detection — exact IDs only
     const hasATC = await page.evaluate(() =>
       !!(document.querySelector('#add-to-cart-button'))
     ).catch(() => false);
@@ -328,13 +374,11 @@ async function checkPage(browser, url, isMobile) {
 }
 
 // ─── PROCESS ONE MARKETPLACE TAB ──────────────────────────────────────────────
-// This function handles one complete tab end-to-end.
-// Returns { summary, historyRows, totalBlocked, totalErrors }
 async function processTab(sheets, tabName, today, now) {
   const marketplace = MARKETPLACES[tabName];
 
   console.log(`\n${'─'.repeat(50)}`);
-  console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}`);
+  console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}${marketplace.zipCode ? '  📍 ' + marketplace.zipCode : ''}`);
   console.log(`${'─'.repeat(50)}`);
 
   const asins = await getASINs(sheets, tabName);
@@ -368,10 +412,11 @@ async function processTab(sheets, tabName, today, now) {
     const url       = `${marketplace.baseUrl}/dp/${asin}`;
     const checkedAt = muTime();
 
-    const desktop = await checkPage(browser, url, false);
+    // Pass baseUrl and zipCode so checkPage can set delivery location if needed
+    const desktop = await checkPage(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
-    const mobile = await checkPage(browser, url, true);
+    const mobile = await checkPage(browser, url, true, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
     let alert = '';
@@ -515,7 +560,6 @@ async function main() {
 
   const allTabs = await getTabNames(sheets);
 
-  // Filter to only marketplace tabs we know about
   const tabsToRun = allTabs.filter(t => {
     if (SKIP_SHEETS.includes(t)) return false;
     if (!MARKETPLACES[t]) return false;
@@ -526,9 +570,6 @@ async function main() {
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
   const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
 
-  // ── Split into parallel group and sequential group ─────────────────────────
-  // Saudi Arabia + UAE share the same IP — run them one after the other
-  // Everything else runs fully in parallel
   const parallelTabs   = tabsToRun.filter(t => !SEQUENTIAL_GROUP.includes(t));
   const sequentialTabs = tabsToRun.filter(t =>  SEQUENTIAL_GROUP.includes(t));
 
@@ -538,27 +579,23 @@ async function main() {
   }
   console.log();
 
-  // ── Run all parallel tabs at the same time ─────────────────────────────────
   const parallelResults = await Promise.all(
     parallelTabs.map(tabName => processTab(sheets, tabName, today, now))
   );
 
-  // ── Run sequential tabs one after the other ────────────────────────────────
   const sequentialResults = [];
   for (const tabName of sequentialTabs) {
     const result = await processTab(sheets, tabName, today, now);
     sequentialResults.push(result);
   }
 
-  // ── Collect all results ────────────────────────────────────────────────────
-  const allResults    = [...parallelResults, ...sequentialResults];
-  const summary       = allResults.flatMap(r => r.summary);
-  const historyRows   = allResults.flatMap(r => r.historyRows);
-  const totalChecked  = summary.length;
-  const totalBlocked  = allResults.reduce((n, r) => n + r.totalBlocked, 0);
-  const totalErrors   = allResults.reduce((n, r) => n + r.totalErrors,  0);
+  const allResults   = [...parallelResults, ...sequentialResults];
+  const summary      = allResults.flatMap(r => r.summary);
+  const historyRows  = allResults.flatMap(r => r.historyRows);
+  const totalChecked = summary.length;
+  const totalBlocked = allResults.reduce((n, r) => n + r.totalBlocked, 0);
+  const totalErrors  = allResults.reduce((n, r) => n + r.totalErrors,  0);
 
-  // ── Write history ──────────────────────────────────────────────────────────
   console.log(`\n📋 Writing to History tab...`);
   await appendToHistory(sheets, historyRows);
 
