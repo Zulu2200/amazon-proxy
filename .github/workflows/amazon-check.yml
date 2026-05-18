@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: '20'
 
-      # 3. Cache the node_modules AND Puppeteer's Chrome download
+      # 3. Cache node_modules AND Puppeteer's Chrome download
       #    so subsequent runs start much faster
       - name: Cache node_modules and Puppeteer Chrome
         uses: actions/cache@v4
@@ -36,20 +36,11 @@ jobs:
           restore-keys: |
             deps-${{ runner.os }}-
 
-      # 4. Install npm packages (downloads Chromium on first run)
+      # 4. Install npm packages (downloads Chromium on first run, cached after)
       - name: Install dependencies
         run: npm install
 
-      # 5. Install system libraries that headless Chrome needs on Ubuntu
-      - name: Install Chrome system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
-            libcups2 libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 \
-            libxdamage1 libxfixes3 libxrandr2 libgbm1
-
-      # 6. Run the checker — secrets are injected as environment variables
+      # 5. Run the checker — secrets are injected as environment variables
       - name: Run Amazon listing check
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
