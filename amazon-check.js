@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //  AMAZON LISTING CHECKER — Puppeteer + Google Sheets
-//  Runs via GitHub Actions daily at 1am Mauritius time
-//  Can also be triggered from Google Sheet for a single marketplace
+//  Parallel execution — all marketplaces run simultaneously
+//  Saudi Arabia + UAE share an IP so they run sequentially
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const puppeteer  = require('puppeteer');
@@ -18,59 +18,25 @@ const ONLY_TAB      = (process.env.MARKETPLACE || '').trim();
 const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions', 'History'];
 const HISTORY_TAB   = 'History';
 
-// Random delay 3–8 seconds — mimics human browsing
-const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
+// These two share the same proxy IP — must run sequentially, not in parallel
+const SEQUENTIAL_GROUP = ['Saudi Arabia', 'UAE'];
 
-// ─── UNAVAILABLE PHRASES (all 16 Amazon languages) ────────────────────────────
-// If any of these appear in the #availability element, the listing is unavailable
+// Random delay 2–5 seconds between checks within a tab
+const randomDelay = () => Math.floor(Math.random() * 3000) + 2000;
+
+// ─── UNAVAILABLE PHRASES (all Amazon languages) ────────────────────────────────
 const UNAVAILABLE_PHRASES = [
-  // English
-  'currently unavailable',
-  'not available',
-  'this item is unavailable',
-  // German
-  'derzeit nicht verfügbar',
-  'nicht auf lager',
-  'nicht verfügbar',
-  // French
-  'actuellement indisponible',
-  'non disponible',
-  'en rupture de stock',
-  // Spanish
-  'actualmente no disponible',
-  'no disponible',
-  'agotado',
-  // Italian
-  'attualmente non disponibile',
-  'non disponibile',
-  'esaurito',
-  // Dutch
-  'momenteel niet beschikbaar',
-  'niet beschikbaar',
-  'uitverkocht',
-  // Polish
-  'obecnie niedostępny',
-  'niedostępny',
-  'chwilowo niedostępny',
-  // Swedish
-  'för tillfället inte tillgänglig',
-  'inte tillgänglig',
-  'slut i lager',
-  // Portuguese (Brazil)
-  'atualmente indisponível',
-  'indisponível',
-  'sem estoque',
-  // Arabic (Saudi/UAE)
-  'غير متوفر حاليا',
-  'غير متوفر',
+  'currently unavailable', 'not available', 'this item is unavailable',
+  'derzeit nicht verfügbar', 'nicht auf lager', 'nicht verfügbar',
+  'actuellement indisponible', 'non disponible', 'en rupture de stock',
+  'actualmente no disponible', 'no disponible', 'agotado',
+  'attualmente non disponibile', 'non disponibile', 'esaurito',
+  'momenteel niet beschikbaar', 'niet beschikbaar', 'uitverkocht',
+  'obecnie niedostępny', 'niedostępny', 'chwilowo niedostępny',
+  'för tillfället inte tillgänglig', 'inte tillgänglig', 'slut i lager',
+  'atualmente indisponível', 'indisponível', 'sem estoque',
+  'غير متوفر حاليا', 'غير متوفر',
 ];
-
-// ─── COLUMN LAYOUT ─────────────────────────────────────────────────────────────
-// A=Category, B=ASIN, C=SKU,
-// D=Desktop ATC, E=Desktop Buy, F=Mobile ATC, G=Mobile Buy,
-// H=Notes, I=Last Checked, J=URL,
-// K=Manual Check Notes ← READ ONLY, never overwritten, never used for logic
-// L=Stock Status, M=Alert
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
@@ -109,9 +75,9 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-// ─── APPLY CONDITIONAL FORMATTING TO ALL TABS ──────────────────────────────────
+// ─── APPLY CONDITIONAL FORMATTING ──────────────────────────────────────────────
 async function applyConditionalFormatting(sheets) {
-  console.log('🎨 Setting up conditional formatting on all tabs...');
+  console.log('🎨 Setting up conditional formatting...');
 
   const meta = await sheets.spreadsheets.get({
     spreadsheetId: SHEET_ID,
@@ -220,8 +186,7 @@ async function getTabNames(sheets) {
   return meta.data.sheets.map(s => s.properties.title);
 }
 
-// ─── READ ASINs AND SKUs FROM COLUMNS B & C ONLY ──────────────────────────────
-// Column K (Manual Check Notes) is never read — it's purely for your own use
+// ─── READ ASINs AND SKUs ───────────────────────────────────────────────────────
 async function getASINs(sheets, tabName) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -238,7 +203,6 @@ async function getASINs(sheets, tabName) {
 }
 
 // ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
-// Writes D:J and L:M — column K (Manual Check Notes) is NEVER touched
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -291,7 +255,6 @@ async function checkPage(browser, url, isMobile) {
       { timeout: 8000 }
     ).catch(() => {});
 
-    // ── CAPTCHA / block ────────────────────────────────────────────────────────
     const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(
       () => (document.body ? document.body.innerText.substring(0, 600) : '')
@@ -306,13 +269,11 @@ async function checkPage(browser, url, isMobile) {
       return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
     }
 
-    // ── UNAVAILABILITY CHECK (language-independent) ────────────────────────────
     const availabilityText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.toLowerCase().trim() : '';
     }).catch(() => '');
 
-    // Also check if the purchase box is entirely absent from the page
     const hasPurchaseBox = await page.evaluate(() => !!(
       document.querySelector('#buybox')             ||
       document.querySelector('#desktop_buybox')     ||
@@ -336,9 +297,6 @@ async function checkPage(browser, url, isMobile) {
       };
     }
 
-    // ── TIGHTENED BUTTON DETECTION ─────────────────────────────────────────────
-    // Only exact IDs — never wildcards — to avoid false positives from
-    // wishlist, registry, or other non-purchase buttons on the page
     const hasATC = await page.evaluate(() =>
       !!(document.querySelector('#add-to-cart-button'))
     ).catch(() => false);
@@ -347,7 +305,6 @@ async function checkPage(browser, url, isMobile) {
       !!(document.querySelector('#buy-now-button'))
     ).catch(() => false);
 
-    // ── STOCK TEXT ─────────────────────────────────────────────────────────────
     const stockText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
@@ -363,12 +320,110 @@ async function checkPage(browser, url, isMobile) {
 
   } catch (err) {
     const msg = (err.message || '').substring(0, 60);
-    console.log(`      ⚠ Page error: ${msg}`);
     return { atc: 'Error', buy: 'Error', stock: msg, isBlocked: false, isUnavailable: false };
 
   } finally {
     await page.close().catch(() => {});
   }
+}
+
+// ─── PROCESS ONE MARKETPLACE TAB ──────────────────────────────────────────────
+// This function handles one complete tab end-to-end.
+// Returns { summary, historyRows, totalBlocked, totalErrors }
+async function processTab(sheets, tabName, today, now) {
+  const marketplace = MARKETPLACES[tabName];
+
+  console.log(`\n${'─'.repeat(50)}`);
+  console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}`);
+  console.log(`${'─'.repeat(50)}`);
+
+  const asins = await getASINs(sheets, tabName);
+  if (asins.length === 0) {
+    console.log(`   [${tabName}] no ASINs found — skipping`);
+    return { summary: [], historyRows: [], totalBlocked: 0, totalErrors: 0 };
+  }
+  console.log(`   [${tabName}] ${asins.length} ASINs to check`);
+
+  const [proxyHost, proxyPort] = marketplace.proxy.split(':');
+
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: [
+      `--proxy-server=http://${proxyHost}:${proxyPort}`,
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
+      '--window-size=1366,768',
+    ],
+  });
+
+  const summary     = [];
+  const historyRows = [];
+  let totalBlocked  = 0;
+  let totalErrors   = 0;
+
+  for (const { asin, sku, sheetRow } of asins) {
+    const url       = `${marketplace.baseUrl}/dp/${asin}`;
+    const checkedAt = muTime();
+
+    const desktop = await checkPage(browser, url, false);
+    await sleep(randomDelay());
+
+    const mobile = await checkPage(browser, url, true);
+    await sleep(randomDelay());
+
+    let alert = '';
+    let notes = '';
+
+    if (desktop.isBlocked) {
+      alert = '⚠️ BLOCKED';
+      notes = 'Amazon blocked this check';
+      totalBlocked++;
+    } else if (desktop.atc === 'Error') {
+      alert = '⚠️ ERROR';
+      notes = desktop.stock;
+      totalErrors++;
+    } else if (desktop.isUnavailable) {
+      alert = '🔴 UNAVAILABLE';
+      notes = desktop.stock || 'Listing unavailable';
+    } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
+      alert = '✅ LIVE';
+    } else {
+      alert = '🔴 NO BUTTONS';
+      notes = desktop.stock || 'No ATC or Buy Now found';
+    }
+
+    console.log(
+      `   [${tabName}] ${asin} | ` +
+      `D: ATC=${desktop.atc} Buy=${desktop.buy} | ` +
+      `M: ATC=${mobile.atc} Buy=${mobile.buy} | ${alert}`
+    );
+
+    const dToJ = [
+      desktop.atc, desktop.buy, mobile.atc, mobile.buy,
+      notes, checkedAt, url,
+    ];
+    const lToM = [desktop.stock, alert];
+
+    try {
+      await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
+    } catch (err) {
+      console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
+    }
+
+    if (alert !== '✅ LIVE') {
+      historyRows.push([today, now, tabName, asin, sku, alert, notes]);
+    }
+
+    summary.push({ marketplace: tabName, asin, sku, alert, notes });
+  }
+
+  await browser.close().catch(() => {});
+  console.log(`   ✅ [${tabName}] complete`);
+
+  return { summary, historyRows, totalBlocked, totalErrors };
 }
 
 // ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
@@ -393,9 +448,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
   const scope = ONLY_TAB ? `${ONLY_TAB} only` : 'all marketplaces';
 
   const html = `
-    <h2 style="color:#333;font-family:Arial,sans-serif">
-      Amazon Listing Check — ${muTime()}
-    </h2>
+    <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — ${muTime()}</h2>
     <p style="font-family:Arial,sans-serif">
       ✅ <strong>${totalChecked}</strong> ASINs checked (${scope})<br>
       ⏱ Completed in <strong>${duration} minutes</strong><br>
@@ -403,12 +456,8 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`           : ''}
     </p>
     ${issues.length === 0
-      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">
-           ✅ All listings are LIVE — no issues found!
-         </p>`
-      : `<h3 style="color:#c00;font-family:Arial,sans-serif">
-           ⚠️ ${issues.length} issue(s) need attention:
-         </h3>
+      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All listings are LIVE — no issues found!</p>`
+      : `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s) need attention:</h3>
          <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">
            <tr style="background:#f0f0f0">
              <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
@@ -425,8 +474,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
          style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">
         Open Google Sheet
       </a>
-    </p>
-  `;
+    </p>`;
 
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -456,7 +504,7 @@ async function main() {
   console.log(`\n${'═'.repeat(60)}`);
   console.log(ONLY_TAB
     ? `  🚀  Amazon Check — ${ONLY_TAB} only — ${muTime()}`
-    : `  🚀  Amazon Check — ALL tabs — ${muTime()}`
+    : `  🚀  Amazon Check — ALL tabs PARALLEL — ${muTime()}`
   );
   console.log(`${'═'.repeat(60)}\n`);
 
@@ -467,116 +515,50 @@ async function main() {
 
   const allTabs = await getTabNames(sheets);
 
-  let totalChecked  = 0;
-  let totalBlocked  = 0;
-  let totalErrors   = 0;
-  const summary     = [];
-  const historyRows = [];
+  // Filter to only marketplace tabs we know about
+  const tabsToRun = allTabs.filter(t => {
+    if (SKIP_SHEETS.includes(t)) return false;
+    if (!MARKETPLACES[t]) return false;
+    if (ONLY_TAB && t !== ONLY_TAB) return false;
+    return true;
+  });
 
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
   const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
 
-  for (const tabName of allTabs) {
-    if (SKIP_SHEETS.includes(tabName)) continue;
-    if (ONLY_TAB && tabName !== ONLY_TAB) continue;
+  // ── Split into parallel group and sequential group ─────────────────────────
+  // Saudi Arabia + UAE share the same IP — run them one after the other
+  // Everything else runs fully in parallel
+  const parallelTabs   = tabsToRun.filter(t => !SEQUENTIAL_GROUP.includes(t));
+  const sequentialTabs = tabsToRun.filter(t =>  SEQUENTIAL_GROUP.includes(t));
 
-    const marketplace = MARKETPLACES[tabName];
-    if (!marketplace) {
-      console.log(`⚠️  No config for tab "${tabName}" — skipping\n`);
-      continue;
-    }
+  console.log(`🔀 Running ${parallelTabs.length} tabs in parallel`);
+  if (sequentialTabs.length > 0) {
+    console.log(`🔁 Running ${sequentialTabs.length} tab(s) sequentially (shared IP): ${sequentialTabs.join(', ')}`);
+  }
+  console.log();
 
-    console.log(`\n${'─'.repeat(60)}`);
-    console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}`);
-    console.log(`${'─'.repeat(60)}`);
+  // ── Run all parallel tabs at the same time ─────────────────────────────────
+  const parallelResults = await Promise.all(
+    parallelTabs.map(tabName => processTab(sheets, tabName, today, now))
+  );
 
-    const asins = await getASINs(sheets, tabName);
-    if (asins.length === 0) {
-      console.log(`   (no ASINs found — skipping)`);
-      continue;
-    }
-    console.log(`   ${asins.length} ASINs to check\n`);
-
-    const [proxyHost, proxyPort] = marketplace.proxy.split(':');
-
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        `--proxy-server=http://${proxyHost}:${proxyPort}`,
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1366,768',
-      ],
-    });
-
-    for (const { asin, sku, sheetRow } of asins) {
-      const url       = `${marketplace.baseUrl}/dp/${asin}`;
-      const checkedAt = muTime();
-
-      process.stdout.write(`   ${asin}  `);
-
-      const desktop = await checkPage(browser, url, false);
-      await sleep(randomDelay());
-
-      const mobile = await checkPage(browser, url, true);
-      await sleep(randomDelay());
-
-      // ── Alert status — based purely on what Amazon's page shows ──────────────
-      let alert = '';
-      let notes = '';
-
-      if (desktop.isBlocked) {
-        alert = '⚠️ BLOCKED';
-        notes = 'Amazon blocked this check';
-        totalBlocked++;
-      } else if (desktop.atc === 'Error') {
-        alert = '⚠️ ERROR';
-        notes = desktop.stock;
-        totalErrors++;
-      } else if (desktop.isUnavailable) {
-        alert = '🔴 UNAVAILABLE';
-        notes = desktop.stock || 'Listing unavailable';
-      } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
-        alert = '✅ LIVE';
-      } else {
-        alert = '🔴 NO BUTTONS';
-        notes = desktop.stock || 'No ATC or Buy Now found';
-      }
-
-      console.log(
-        `Desktop: ATC=${desktop.atc}  Buy=${desktop.buy}  ` +
-        `| Mobile: ATC=${mobile.atc}  Buy=${mobile.buy}  ` +
-        `| ${alert}`
-      );
-
-      const dToJ = [
-        desktop.atc, desktop.buy, mobile.atc, mobile.buy,
-        notes, checkedAt, url,
-      ];
-
-      const lToM = [desktop.stock, alert];
-
-      try {
-        await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
-      } catch (err) {
-        console.log(`      ⚠ Sheet write failed for ${asin}: ${err.message}`);
-      }
-
-      if (alert !== '✅ LIVE') {
-        historyRows.push([today, now, tabName, asin, sku, alert, notes]);
-      }
-
-      summary.push({ marketplace: tabName, asin, sku, alert, notes });
-      totalChecked++;
-    }
-
-    await browser.close().catch(() => {});
-    console.log(`\n   ✅ ${tabName} complete`);
+  // ── Run sequential tabs one after the other ────────────────────────────────
+  const sequentialResults = [];
+  for (const tabName of sequentialTabs) {
+    const result = await processTab(sheets, tabName, today, now);
+    sequentialResults.push(result);
   }
 
+  // ── Collect all results ────────────────────────────────────────────────────
+  const allResults    = [...parallelResults, ...sequentialResults];
+  const summary       = allResults.flatMap(r => r.summary);
+  const historyRows   = allResults.flatMap(r => r.historyRows);
+  const totalChecked  = summary.length;
+  const totalBlocked  = allResults.reduce((n, r) => n + r.totalBlocked, 0);
+  const totalErrors   = allResults.reduce((n, r) => n + r.totalErrors,  0);
+
+  // ── Write history ──────────────────────────────────────────────────────────
   console.log(`\n📋 Writing to History tab...`);
   await appendToHistory(sheets, historyRows);
 
