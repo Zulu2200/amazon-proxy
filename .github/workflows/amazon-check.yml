@@ -1,11 +1,11 @@
 name: Amazon Listing Check
 
 on:
-  # Run automatically every day at 01:00 UTC = 05:00 Mauritius time (UTC+4)
+  # 1:00am Mauritius time = 9:00pm UTC the night before
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 21 * * *'
 
-  # Also lets you click "Run workflow" manually in the GitHub Actions tab
+  # Lets you click "Run workflow" manually anytime
   workflow_dispatch:
 
 jobs:
@@ -14,18 +14,14 @@ jobs:
     timeout-minutes: 180   # 3-hour safety cut-off
 
     steps:
-      # 1. Download the repo files
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Set up Node.js 20
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # 3. Cache node_modules AND Puppeteer's Chrome download
-      #    so subsequent runs start much faster
       - name: Cache node_modules and Puppeteer Chrome
         uses: actions/cache@v4
         with:
@@ -36,14 +32,14 @@ jobs:
           restore-keys: |
             deps-${{ runner.os }}-
 
-      # 4. Install npm packages (downloads Chromium on first run, cached after)
       - name: Install dependencies
         run: npm install
 
-      # 5. Run the checker — secrets are injected as environment variables
       - name: Run Amazon listing check
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           PROXY_USER: ${{ secrets.PROXY_USER }}
           PROXY_PASS: ${{ secrets.PROXY_PASS }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
         run: node amazon-check.js
