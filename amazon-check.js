@@ -1,21 +1,32 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //  AMAZON LISTING CHECKER — Puppeteer + Google Sheets
-//  Runs via GitHub Actions on a daily schedule
+//  Runs via GitHub Actions daily at 1am Mauritius time
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const puppeteer  = require('puppeteer');
 const { google } = require('googleapis');
+const nodemailer = require('nodemailer');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────────
-const SHEET_ID    = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
-const PROXY_USER  = process.env.PROXY_USER;
-const PROXY_PASS  = process.env.PROXY_PASS;
-const SKIP_SHEETS = ['Summary', 'Template', 'Instructions'];
+const SHEET_ID      = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
+const PROXY_USER    = process.env.PROXY_USER;
+const PROXY_PASS    = process.env.PROXY_PASS;
+const GMAIL_USER    = process.env.GMAIL_USER;    // your gmail address
+const GMAIL_PASS    = process.env.GMAIL_PASS;    // your gmail app password
+const NOTIFY_EMAIL  = process.env.GMAIL_USER;    // send to yourself
+const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions'];
 
-// Random delay between 3 and 8 seconds — mimics human browsing behaviour
+// Random delay 3–8 seconds between checks — mimics human browsing
 const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
 
-// Marketplace config: tab name → Amazon URL + which Webshare proxy IP to use
+// ─── COLUMN LAYOUT ─────────────────────────────────────────────────────────────
+// A=Category, B=ASIN, C=SKU,
+// D=Desktop ATC, E=Desktop Buy, F=Mobile ATC, G=Mobile Buy,
+// H=Notes, I=Last Checked, J=URL,
+// K=Manual Check Notes ← NEVER OVERWRITTEN,
+// L=Stock Status, M=Alert
+
+// ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
   'USA':          { baseUrl: 'https://www.amazon.com',    proxy: '9.142.43.131:5301'   },
   'Canada':       { baseUrl: 'https://www.amazon.ca',     proxy: '192.53.140.18:5114'  },
@@ -35,11 +46,6 @@ const MARKETPLACES = {
   'UAE':          { baseUrl: 'https://www.amazon.ae',     proxy: '82.29.239.167:5315'  },
 };
 
-// Column layout (matching your Google Sheet):
-//  A=ASIN, B=SKU, C=Desktop ATC, D=Desktop Buy, E=Mobile ATC, F=Mobile Buy,
-//  G=Notes, H=Last Checked, I=URL, J=Manual Check Notes (DO NOT OVERWRITE),
-//  K=Stock Status, L=Alert
-
 // ─── GOOGLE SHEETS CLIENT ──────────────────────────────────────────────────────
 async function getSheetsClient() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
@@ -50,47 +56,49 @@ async function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
-// ─── GET ALL TAB NAMES FROM SPREADSHEET ────────────────────────────────────────
+// ─── GET ALL TAB NAMES ─────────────────────────────────────────────────────────
 async function getTabNames(sheets) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   return meta.data.sheets.map(s => s.properties.title);
 }
 
-// ─── READ ASINs FROM A TAB (column A, skipping header row) ────────────────────
+// ─── READ ASINs FROM COLUMN B (skipping header row 1) ─────────────────────────
 async function getASINs(sheets, tabName) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${tabName}'!A:A`,
+    range: `'${tabName}'!B:B`,  // Column B = ASIN
   });
   const rows = res.data.values || [];
   const asins = [];
-  for (let i = 1; i < rows.length; i++) {  // i=0 is header row
+  for (let i = 1; i < rows.length; i++) {  // i=0 is header
     const asin = (rows[i][0] || '').trim();
     if (asin) {
       asins.push({
         asin,
-        sheetRow: i + 1, // 1-based (header=row1, first ASIN=row2)
+        sheetRow: i + 1, // 1-based (header=row1, first data=row2)
       });
     }
   }
   return asins;
 }
 
-// ─── WRITE ONE ROW IMMEDIATELY (live update after each ASIN) ──────────────────
-// Writes C:I and K:L — deliberately skips J (Manual Check Notes)
-async function writeOneRow(sheets, tabName, sheetRow, cToI, kToL) {
+// ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
+// Writes D:J (ATC, Buy, Mobile ATC, Mobile Buy, Notes, Last Checked, URL)
+// and L:M (Stock Status, Alert)
+// Column K (Manual Check Notes) is NEVER touched
+async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
     requestBody: {
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: `'${tabName}'!C${sheetRow}:I${sheetRow}`,
-          values: [cToI],
+          range: `'${tabName}'!D${sheetRow}:J${sheetRow}`,
+          values: [dToJ],   // 7 values: D,E,F,G,H,I,J
         },
         {
-          range: `'${tabName}'!K${sheetRow}:L${sheetRow}`,
-          values: [kToL],
+          range: `'${tabName}'!L${sheetRow}:M${sheetRow}`,
+          values: [lToM],   // 2 values: L,M  (skipping K)
         },
       ],
     },
@@ -104,7 +112,7 @@ async function checkPage(browser, url, isMobile) {
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
 
-    // Anti-detection: hide the webdriver flag that reveals automation
+    // Hide automation flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       window.chrome = { runtime: {} };
@@ -175,8 +183,8 @@ async function checkPage(browser, url, isMobile) {
     }).catch(() => '');
 
     return {
-      atc:       hasATC ? 'Found ✅' : 'Missing ❌',
-      buy:       hasBuy ? 'Found ✅' : 'Missing ❌',
+      atc:       hasATC ? 'Found' : 'Missing',
+      buy:       hasBuy ? 'Found' : 'Missing',
       stock:     stockText.substring(0, 60),
       isBlocked: false,
     };
@@ -191,12 +199,80 @@ async function checkPage(browser, url, isMobile) {
   }
 }
 
+// ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
+async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime) {
+  if (!GMAIL_USER || !GMAIL_PASS) {
+    console.log('   (no email credentials set — skipping email)');
+    return;
+  }
+
+  const duration = Math.round((Date.now() - startTime) / 60000);
+
+  // Build a clean HTML table of issues (blocked or missing buttons)
+  const issues = summary.filter(r => r.alert !== '✅ LIVE');
+  const issueRows = issues.map(r =>
+    `<tr>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.asin}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.alert}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.notes || ''}</td>
+    </tr>`
+  ).join('');
+
+  const html = `
+    <h2 style="color:#333">Amazon Listing Check — ${muTime()}</h2>
+    <p>
+      ✅ <strong>${totalChecked}</strong> ASINs checked across 16 marketplaces<br>
+      ⏱ Completed in <strong>${duration} minutes</strong><br>
+      ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked by Amazon<br>` : ''}
+      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`           : ''}
+    </p>
+
+    ${issues.length === 0
+      ? `<p style="color:green;font-weight:bold">✅ All listings are LIVE — no issues found!</p>`
+      : `<h3 style="color:#c00">⚠️ ${issues.length} issue(s) need attention:</h3>
+         <table style="border-collapse:collapse;font-size:13px">
+           <tr style="background:#f0f0f0">
+             <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
+             <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
+             <th style="padding:4px 8px;border:1px solid #ddd">Status</th>
+             <th style="padding:4px 8px;border:1px solid #ddd">Notes</th>
+           </tr>
+           ${issueRows}
+         </table>`
+    }
+
+    <p style="margin-top:20px;color:#888;font-size:12px">
+      Full results: 
+      <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}">Open Google Sheet</a>
+    </p>
+  `;
+
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+  });
+
+  await transporter.sendMail({
+    from:    `Amazon Checker <${GMAIL_USER}>`,
+    to:      NOTIFY_EMAIL,
+    subject: issues.length === 0
+      ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE`
+      : `⚠️ Amazon Check — ${issues.length} issue(s) found`,
+    html,
+  });
+
+  console.log(`   📧 Email sent to ${NOTIFY_EMAIL}`);
+}
+
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
 const sleep  = ms => new Promise(r => setTimeout(r, ms));
 const muTime = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────────
 async function main() {
+  const startTime = Date.now();
+
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`  🚀  Amazon Listing Check — ${muTime()}`);
   console.log(`${'═'.repeat(60)}\n`);
@@ -207,6 +283,7 @@ async function main() {
   let totalChecked = 0;
   let totalBlocked = 0;
   let totalErrors  = 0;
+  const summary    = []; // collects all results for the email
 
   for (const tabName of allTabs) {
     if (SKIP_SHEETS.includes(tabName)) continue;
@@ -251,11 +328,11 @@ async function main() {
 
       // Desktop check
       const desktop = await checkPage(browser, url, false);
-      await sleep(randomDelay()); // random 3–8s
+      await sleep(randomDelay());
 
       // Mobile check
       const mobile = await checkPage(browser, url, true);
-      await sleep(randomDelay()); // random 3–8s
+      await sleep(randomDelay());
 
       // Determine overall status
       let alert = '';
@@ -269,7 +346,7 @@ async function main() {
         alert = '⚠️ ERROR';
         notes = desktop.stock;
         totalErrors++;
-      } else if (desktop.atc.includes('Found') || desktop.buy.includes('Found')) {
+      } else if (desktop.atc === 'Found' || desktop.buy === 'Found') {
         alert = '✅ LIVE';
       } else {
         alert = '🔴 NO BUTTONS';
@@ -282,30 +359,32 @@ async function main() {
         `| ${alert}`
       );
 
-      // Columns C:I (7 values)
-      const cToI = [
-        desktop.atc,   // C — Desktop ATC
-        desktop.buy,   // D — Desktop Buy
-        mobile.atc,    // E — Mobile ATC
-        mobile.buy,    // F — Mobile Buy
-        notes,         // G — Notes
-        checkedAt,     // H — Last Checked
-        url,           // I — URL
+      // D:J — 7 columns
+      const dToJ = [
+        desktop.atc,   // D — Desktop ATC
+        desktop.buy,   // E — Desktop Buy
+        mobile.atc,    // F — Mobile ATC
+        mobile.buy,    // G — Mobile Buy
+        notes,         // H — Notes
+        checkedAt,     // I — Last Checked
+        url,           // J — URL
       ];
 
-      // Columns K:L (skipping J — Manual Check Notes)
-      const kToL = [
-        desktop.stock, // K — Stock Status
-        alert,         // L — Alert
+      // L:M — 2 columns (K = Manual Check Notes is skipped)
+      const lToM = [
+        desktop.stock, // L — Stock Status
+        alert,         // M — Alert
       ];
 
-      // Write immediately to sheet — results appear row by row in real time
+      // Write immediately — live row-by-row update in the sheet
       try {
-        await writeOneRow(sheets, tabName, sheetRow, cToI, kToL);
+        await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
       } catch (err) {
         console.log(`      ⚠ Sheet write failed for ${asin}: ${err.message}`);
       }
 
+      // Add to summary for email
+      summary.push({ marketplace: tabName, asin, alert, notes });
       totalChecked++;
     }
 
@@ -319,6 +398,10 @@ async function main() {
   if (totalBlocked > 0) console.log(`  ⚠️   ${totalBlocked} blocked by Amazon`);
   if (totalErrors  > 0) console.log(`  ❌  ${totalErrors} errors`);
   console.log(`${'═'.repeat(60)}\n`);
+
+  // Send email summary
+  console.log('📧 Sending email summary...');
+  await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime);
 }
 
 // ─── RUN ───────────────────────────────────────────────────────────────────────
