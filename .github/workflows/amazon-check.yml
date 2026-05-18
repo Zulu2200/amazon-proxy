@@ -5,13 +5,18 @@ on:
   schedule:
     - cron: '0 21 * * *'
 
-  # Lets you click "Run workflow" manually anytime
+  # Manual trigger — from GitHub OR from the Google Sheet button
   workflow_dispatch:
+    inputs:
+      marketplace:
+        description: 'Marketplace to check (leave blank for ALL tabs)'
+        required: false
+        default: ''
 
 jobs:
   check-listings:
     runs-on: ubuntu-latest
-    timeout-minutes: 180   # 3-hour safety cut-off
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -42,4 +47,5 @@ jobs:
           PROXY_PASS: ${{ secrets.PROXY_PASS }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+          MARKETPLACE: ${{ github.event.inputs.marketplace }}
         run: node amazon-check.js
