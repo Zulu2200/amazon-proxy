@@ -12,8 +12,8 @@ const PROXY_USER  = process.env.PROXY_USER;
 const PROXY_PASS  = process.env.PROXY_PASS;
 const SKIP_SHEETS = ['Summary', 'Template', 'Instructions'];
 
-// Delay between checks (ms) — keeps Amazon from rate-limiting
-const DELAY_BETWEEN_CHECKS = 3000;
+// Random delay between 3 and 8 seconds — mimics human browsing behaviour
+const randomDelay = () => Math.floor(Math.random() * 5000) + 3000;
 
 // Marketplace config: tab name → Amazon URL + which Webshare proxy IP to use
 const MARKETPLACES = {
@@ -104,7 +104,7 @@ async function checkPage(browser, url, isMobile) {
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
 
-    // Anti-detection: hide the webdriver flag
+    // Anti-detection: hide the webdriver flag that reveals automation
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       window.chrome = { runtime: {} };
@@ -251,11 +251,11 @@ async function main() {
 
       // Desktop check
       const desktop = await checkPage(browser, url, false);
-      await sleep(DELAY_BETWEEN_CHECKS);
+      await sleep(randomDelay()); // random 3–8s
 
       // Mobile check
       const mobile = await checkPage(browser, url, true);
-      await sleep(DELAY_BETWEEN_CHECKS);
+      await sleep(randomDelay()); // random 3–8s
 
       // Determine overall status
       let alert = '';
@@ -299,7 +299,7 @@ async function main() {
         alert,         // L — Alert
       ];
 
-      // Write immediately to sheet — you see it appear row by row in real time
+      // Write immediately to sheet — results appear row by row in real time
       try {
         await writeOneRow(sheets, tabName, sheetRow, cToI, kToL);
       } catch (err) {
