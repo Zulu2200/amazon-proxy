@@ -64,44 +64,35 @@ async function getASINs(sheets, tabName) {
   });
   const rows = res.data.values || [];
   const asins = [];
-  // Start at index 1 to skip the header row (row 1 in the sheet)
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = 1; i < rows.length; i++) {  // i=0 is header row
     const asin = (rows[i][0] || '').trim();
     if (asin) {
       asins.push({
         asin,
-        sheetRow: i + 1, // 1-based sheet row number (header = row 1, first ASIN = row 2)
+        sheetRow: i + 1, // 1-based (header=row1, first ASIN=row2)
       });
     }
   }
   return asins;
 }
 
-// ─── WRITE RESULTS BACK TO SHEET ───────────────────────────────────────────────
+// ─── WRITE ONE ROW IMMEDIATELY (live update after each ASIN) ──────────────────
 // Writes C:I and K:L — deliberately skips J (Manual Check Notes)
-async function writeResults(sheets, tabName, resultRows) {
-  if (resultRows.length === 0) return;
-
-  const data = [];
-  for (const r of resultRows) {
-    // C through I (7 columns): Desktop ATC, Desktop Buy, Mobile ATC, Mobile Buy,
-    //                           Notes, Last Checked, URL
-    data.push({
-      range: `'${tabName}'!C${r.sheetRow}:I${r.sheetRow}`,
-      values: [r.cToI],
-    });
-    // K through L (2 columns, skipping J): Stock Status, Alert
-    data.push({
-      range: `'${tabName}'!K${r.sheetRow}:L${r.sheetRow}`,
-      values: [r.kToL],
-    });
-  }
-
+async function writeOneRow(sheets, tabName, sheetRow, cToI, kToL) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
     requestBody: {
       valueInputOption: 'USER_ENTERED',
-      data,
+      data: [
+        {
+          range: `'${tabName}'!C${sheetRow}:I${sheetRow}`,
+          values: [cToI],
+        },
+        {
+          range: `'${tabName}'!K${sheetRow}:L${sheetRow}`,
+          values: [kToL],
+        },
+      ],
     },
   });
 }
@@ -111,16 +102,14 @@ async function checkPage(browser, url, isMobile) {
   const page = await browser.newPage();
 
   try {
-    // Authenticate with the proxy
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
 
-    // Anti-detection: remove the webdriver property that flags automation
+    // Anti-detection: hide the webdriver flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       window.chrome = { runtime: {} };
     });
 
-    // Set device profile
     if (isMobile) {
       await page.setUserAgent(
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
@@ -135,26 +124,21 @@ async function checkPage(browser, url, isMobile) {
       await page.setViewport({ width: 1366, height: 768 });
     }
 
-    // Browser-like headers
     await page.setExtraHTTPHeaders({
       'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate, br',
-      'Cache-Control':   'no-cache',
-      'Pragma':          'no-cache',
     });
 
-    // Navigate to the product page
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Wait up to 8 seconds for something useful to appear
     await page.waitForSelector(
       '#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page',
       { timeout: 8000 }
-    ).catch(() => {}); // Ignore timeout — we'll still read whatever loaded
+    ).catch(() => {});
 
-    // ── Check for CAPTCHA / block ──────────────────────────────────────────────
-    const pageTitle = await page.title().catch(() => '');
+    // Check for CAPTCHA / block
+    const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(
       () => (document.body ? document.body.innerText.substring(0, 600) : '')
     ).catch(() => '');
@@ -168,7 +152,7 @@ async function checkPage(browser, url, isMobile) {
       return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true };
     }
 
-    // ── Check for Add to Cart button ───────────────────────────────────────────
+    // Check for Add to Cart button
     const hasATC = await page.evaluate(() => !!(
       document.querySelector('#add-to-cart-button')         ||
       document.querySelector('[name="submit.add-to-cart"]') ||
@@ -176,7 +160,7 @@ async function checkPage(browser, url, isMobile) {
       document.querySelector('[id*="add-to-cart"]')
     )).catch(() => false);
 
-    // ── Check for Buy Now button ───────────────────────────────────────────────
+    // Check for Buy Now button
     const hasBuy = await page.evaluate(() => !!(
       document.querySelector('#buy-now-button')         ||
       document.querySelector('[name="submit.buy-now"]') ||
@@ -184,7 +168,7 @@ async function checkPage(browser, url, isMobile) {
       document.querySelector('[id*="buy-now"]')
     )).catch(() => false);
 
-    // ── Get stock / availability text ──────────────────────────────────────────
+    // Get stock / availability text
     const stockText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
@@ -207,12 +191,9 @@ async function checkPage(browser, url, isMobile) {
   }
 }
 
-// ─── SLEEP HELPER ──────────────────────────────────────────────────────────────
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-// ─── MAURITIUS TIME ────────────────────────────────────────────────────────────
-const muTime = () =>
-  new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
+// ─── HELPERS ───────────────────────────────────────────────────────────────────
+const sleep  = ms => new Promise(r => setTimeout(r, ms));
+const muTime = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────────
 async function main() {
@@ -228,7 +209,6 @@ async function main() {
   let totalErrors  = 0;
 
   for (const tabName of allTabs) {
-    // Skip non-marketplace tabs
     if (SKIP_SHEETS.includes(tabName)) continue;
 
     const marketplace = MARKETPLACES[tabName];
@@ -241,16 +221,15 @@ async function main() {
     console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}`);
     console.log(`${'─'.repeat(60)}`);
 
-    // Read ASINs from the sheet
     const asins = await getASINs(sheets, tabName);
     if (asins.length === 0) {
       console.log(`   (no ASINs found — skipping)`);
       continue;
     }
-    console.log(`   ${asins.length} ASINs to check`);
+    console.log(`   ${asins.length} ASINs to check\n`);
 
-    // Launch a fresh browser for this marketplace (proxy is set at launch time)
     const [proxyHost, proxyPort] = marketplace.proxy.split(':');
+
     const browser = await puppeteer.launch({
       headless: 'new',
       args: [
@@ -264,23 +243,21 @@ async function main() {
       ],
     });
 
-    const resultRows = [];
-
     for (const { asin, sheetRow } of asins) {
       const url       = `${marketplace.baseUrl}/dp/${asin}`;
       const checkedAt = muTime();
 
       process.stdout.write(`   ${asin}  `);
 
-      // ── Desktop check ─────────────────────────────────────────────────────
+      // Desktop check
       const desktop = await checkPage(browser, url, false);
       await sleep(DELAY_BETWEEN_CHECKS);
 
-      // ── Mobile check ──────────────────────────────────────────────────────
+      // Mobile check
       const mobile = await checkPage(browser, url, true);
       await sleep(DELAY_BETWEEN_CHECKS);
 
-      // ── Determine overall status ──────────────────────────────────────────
+      // Determine overall status
       let alert = '';
       let notes = '';
 
@@ -305,37 +282,35 @@ async function main() {
         `| ${alert}`
       );
 
-      // ── Build values for sheet columns ────────────────────────────────────
+      // Columns C:I (7 values)
       const cToI = [
-        desktop.atc,  // C — Desktop ATC
-        desktop.buy,  // D — Desktop Buy
-        mobile.atc,   // E — Mobile ATC
-        mobile.buy,   // F — Mobile Buy
-        notes,        // G — Notes
-        checkedAt,    // H — Last Checked
-        url,          // I — URL
+        desktop.atc,   // C — Desktop ATC
+        desktop.buy,   // D — Desktop Buy
+        mobile.atc,    // E — Mobile ATC
+        mobile.buy,    // F — Mobile Buy
+        notes,         // G — Notes
+        checkedAt,     // H — Last Checked
+        url,           // I — URL
       ];
 
+      // Columns K:L (skipping J — Manual Check Notes)
       const kToL = [
         desktop.stock, // K — Stock Status
         alert,         // L — Alert
       ];
 
-      resultRows.push({ sheetRow, cToI, kToL });
+      // Write immediately to sheet — you see it appear row by row in real time
+      try {
+        await writeOneRow(sheets, tabName, sheetRow, cToI, kToL);
+      } catch (err) {
+        console.log(`      ⚠ Sheet write failed for ${asin}: ${err.message}`);
+      }
+
       totalChecked++;
     }
 
-    // Close this marketplace's browser
     await browser.close().catch(() => {});
-
-    // Write all results for this tab in one batch call
-    console.log(`\n   Writing ${resultRows.length} rows to sheet...`);
-    try {
-      await writeResults(sheets, tabName, resultRows);
-      console.log(`   ✅ ${tabName} saved`);
-    } catch (err) {
-      console.error(`   ❌ Failed to write ${tabName}:`, err.message);
-    }
+    console.log(`\n   ✅ ${tabName} complete`);
   }
 
   console.log(`\n${'═'.repeat(60)}`);
