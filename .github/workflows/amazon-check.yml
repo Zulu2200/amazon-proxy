@@ -3,7 +3,7 @@ name: Amazon Listing Check
 on:
   # 1:00am Mauritius time = 9:00pm UTC the night before
   schedule:
-    - cron: '0 21 * * *'
+    - cron: '0 0 * * *'
 
   # Manual trigger — from GitHub OR from the Google Sheet button
   workflow_dispatch:
