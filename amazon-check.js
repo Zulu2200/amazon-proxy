@@ -103,17 +103,20 @@ async function applyConditionalFormatting(sheets) {
       },
     });
 
-    addRequests.push(rule([buttonRange], 'Found',                  COLOR.green));
-    addRequests.push(rule([buttonRange], 'Missing',                COLOR.red));
-    addRequests.push(rule([buttonRange], 'BLOCKED',                COLOR.amber));
-    addRequests.push(rule([buttonRange], 'Error',                  COLOR.amber));
-    addRequests.push(rule([stockRange],  'In Stock',               COLOR.green));
-    addRequests.push(rule([stockRange],  'left in sto',            COLOR.amber));
-    addRequests.push(rule([stockRange],  'Currently unavailable',  COLOR.red));
-    addRequests.push(rule([alertRange],  'LIVE',                   COLOR.green));
-    addRequests.push(rule([alertRange],  'NO BUTTONS',             COLOR.red));
-    addRequests.push(rule([alertRange],  'BLOCKED',                COLOR.amber));
-    addRequests.push(rule([alertRange],  'ERROR',                  COLOR.amber));
+    // Button columns D:G — match on the word, emoji doesn't affect TEXT_CONTAINS
+    addRequests.push(rule([buttonRange], 'Found',                 COLOR.green));
+    addRequests.push(rule([buttonRange], 'Missing',               COLOR.red));
+    addRequests.push(rule([buttonRange], 'BLOCKED',               COLOR.amber));
+    addRequests.push(rule([buttonRange], 'Error',                 COLOR.amber));
+    // Stock Status L
+    addRequests.push(rule([stockRange],  'In Stock',              COLOR.green));
+    addRequests.push(rule([stockRange],  'left in sto',           COLOR.amber));
+    addRequests.push(rule([stockRange],  'Currently unavailable', COLOR.red));
+    // Alert M
+    addRequests.push(rule([alertRange],  'LIVE',                  COLOR.green));
+    addRequests.push(rule([alertRange],  'NO BUTTONS',            COLOR.red));
+    addRequests.push(rule([alertRange],  'BLOCKED',               COLOR.amber));
+    addRequests.push(rule([alertRange],  'ERROR',                 COLOR.amber));
   }
 
   if (deleteRequests.length > 0) {
@@ -134,43 +137,34 @@ async function applyConditionalFormatting(sheets) {
 
 // ─── ENSURE HISTORY TAB EXISTS WITH HEADERS ────────────────────────────────────
 async function ensureHistoryTab(sheets) {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const meta   = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   const exists = meta.data.sheets.some(s => s.properties.title === HISTORY_TAB);
 
   if (!exists) {
-    // Create the History tab
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: HISTORY_TAB } } }],
-      },
+      requestBody: { requests: [{ addSheet: { properties: { title: HISTORY_TAB } } }] },
     });
-    console.log('📋 Created History tab');
-
-    // Add header row
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
       range: `'${HISTORY_TAB}'!A1:G1`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes']],
-      },
+      requestBody: { values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes']] },
     });
-    console.log('📋 History tab headers added\n');
+    console.log('📋 History tab created\n');
   }
 }
 
 // ─── APPEND ROWS TO HISTORY TAB ────────────────────────────────────────────────
-// Only logs ASINs that are NOT fully LIVE — builds up a searchable problem log
 async function appendToHistory(sheets, historyRows) {
   if (historyRows.length === 0) return;
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
-    range: `'${HISTORY_TAB}'!A:G`,
+    spreadsheetId:    SHEET_ID,
+    range:            `'${HISTORY_TAB}'!A:G`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
-    requestBody: { values: historyRows },
+    requestBody:      { values: historyRows },
   });
 
   console.log(`   📋 ${historyRows.length} issue(s) logged to History tab`);
@@ -186,22 +180,20 @@ async function getTabNames(sheets) {
 async function getASINs(sheets, tabName) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${tabName}'!B:C`,  // B=ASIN, C=SKU
+    range: `'${tabName}'!B:C`,
   });
-  const rows = res.data.values || [];
+  const rows  = res.data.values || [];
   const asins = [];
   for (let i = 1; i < rows.length; i++) {
     const asin = (rows[i][0] || '').trim();
     const sku  = (rows[i][1] || '').trim();
-    if (asin) {
-      asins.push({ asin, sku, sheetRow: i + 1 });
-    }
+    if (asin) asins.push({ asin, sku, sheetRow: i + 1 });
   }
   return asins;
 }
 
 // ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
-// Writes D:J and L:M — column K (Manual Check Notes) is NEVER touched
+// D:J and L:M — column K (Manual Check Notes) is NEVER touched
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -288,8 +280,8 @@ async function checkPage(browser, url, isMobile) {
     }).catch(() => '');
 
     return {
-      atc:       hasATC ? 'Found' : 'Missing',
-      buy:       hasBuy ? 'Found' : 'Missing',
+      atc:       hasATC ? 'Found ✅' : 'Missing ❌',
+      buy:       hasBuy ? 'Found ✅' : 'Missing ❌',
       stock:     stockText.substring(0, 60),
       isBlocked: false,
     };
@@ -333,7 +325,6 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked by Amazon<br>` : ''}
       ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`           : ''}
     </p>
-
     ${issues.length === 0
       ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">
            ✅ All listings are LIVE — no issues found!
@@ -352,7 +343,6 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
            ${issueRows}
          </table>`
     }
-
     <p style="margin-top:24px;font-family:Arial,sans-serif">
       <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}"
          style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">
@@ -392,7 +382,6 @@ async function main() {
 
   const sheets = await getSheetsClient();
 
-  // Setup: formatting + history tab
   await applyConditionalFormatting(sheets);
   await ensureHistoryTab(sheets);
 
@@ -402,9 +391,8 @@ async function main() {
   let totalBlocked  = 0;
   let totalErrors   = 0;
   const summary     = [];
-  const historyRows = []; // collects problem rows to append to History tab at end
+  const historyRows = [];
 
-  // Today's date for the history log
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
   const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
 
@@ -466,7 +454,7 @@ async function main() {
         alert = '⚠️ ERROR';
         notes = desktop.stock;
         totalErrors++;
-      } else if (desktop.atc === 'Found' || desktop.buy === 'Found') {
+      } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
         alert = '✅ LIVE';
       } else {
         alert = '🔴 NO BUTTONS';
@@ -479,23 +467,27 @@ async function main() {
         `| ${alert}`
       );
 
-      // D:J
       const dToJ = [
-        desktop.atc, desktop.buy, mobile.atc, mobile.buy,
-        notes, checkedAt, url,
+        desktop.atc,  // D — Desktop ATC
+        desktop.buy,  // E — Desktop Buy
+        mobile.atc,   // F — Mobile ATC
+        mobile.buy,   // G — Mobile Buy
+        notes,        // H — Notes
+        checkedAt,    // I — Last Checked
+        url,          // J — URL
       ];
 
-      // L:M (K skipped)
-      const lToM = [desktop.stock, alert];
+      const lToM = [
+        desktop.stock, // L — Stock Status
+        alert,         // M — Alert
+      ];
 
-      // Write to sheet immediately
       try {
         await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
       } catch (err) {
         console.log(`      ⚠ Sheet write failed for ${asin}: ${err.message}`);
       }
 
-      // If NOT fully LIVE — add to history log
       if (alert !== '✅ LIVE') {
         historyRows.push([today, now, tabName, asin, sku, alert, notes]);
       }
@@ -508,7 +500,6 @@ async function main() {
     console.log(`\n   ✅ ${tabName} complete`);
   }
 
-  // Append all problem rows to the History tab in one shot
   console.log(`\n📋 Writing to History tab...`);
   await appendToHistory(sheets, historyRows);
 
