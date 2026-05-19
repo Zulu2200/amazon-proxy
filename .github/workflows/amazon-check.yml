@@ -5,11 +5,27 @@ on:
   schedule:
     - cron: '0 1 * * *'
 
-  # Manual trigger — from GitHub OR from the Google Sheet button
+  # Manual trigger — from GitHub, Google Sheet button, or Telegram bot
   workflow_dispatch:
     inputs:
       marketplace:
         description: 'Marketplace to check (leave blank for ALL tabs)'
+        required: false
+        default: ''
+      mode:
+        description: 'Run mode: full or spotcheck'
+        required: false
+        default: 'full'
+      identifiers:
+        description: 'ASINs or SKUs to check (comma separated, spotcheck mode only)'
+        required: false
+        default: ''
+      markets:
+        description: 'Marketplaces for spot check (comma separated or ALL)'
+        required: false
+        default: 'ALL'
+      chat_id:
+        description: 'Telegram chat ID to send spot check results back to'
         required: false
         default: ''
 
@@ -47,5 +63,10 @@ jobs:
           PROXY_PASS: ${{ secrets.PROXY_PASS }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           MARKETPLACE: ${{ github.event.inputs.marketplace }}
+          RUN_MODE: ${{ github.event.inputs.mode }}
+          IDENTIFIERS: ${{ github.event.inputs.identifiers }}
+          MARKETS: ${{ github.event.inputs.markets }}
+          TELEGRAM_CHAT_ID: ${{ github.event.inputs.chat_id }}
         run: node amazon-check.js
