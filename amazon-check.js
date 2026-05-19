@@ -1,8 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //  AMAZON LISTING CHECKER — Puppeteer + Google Sheets
-//  Parallel execution — all marketplaces run simultaneously
-//  Saudi Arabia + UAE share an IP so they run sequentially
-//  Spain + Belgium have delivery location fix applied
+//  Supports two modes:
+//  1. full  — checks all/specific marketplace tabs, updates sheet + email
+//  2. spotcheck — checks specific ASINs/SKUs, sends results to Telegram only
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const puppeteer  = require('puppeteer');
@@ -10,22 +10,24 @@ const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────────
-const SHEET_ID      = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
-const PROXY_USER    = process.env.PROXY_USER;
-const PROXY_PASS    = process.env.PROXY_PASS;
-const GMAIL_USER    = process.env.GMAIL_USER;
-const GMAIL_PASS    = process.env.GMAIL_PASS;
-const ONLY_TAB      = (process.env.MARKETPLACE || '').trim();
-const SKIP_SHEETS   = ['Summary', 'Template', 'Instructions', 'History'];
-const HISTORY_TAB   = 'History';
-
-// These two share the same proxy IP — must run sequentially
+const SHEET_ID        = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
+const PROXY_USER      = process.env.PROXY_USER;
+const PROXY_PASS      = process.env.PROXY_PASS;
+const GMAIL_USER      = process.env.GMAIL_USER;
+const GMAIL_PASS      = process.env.GMAIL_PASS;
+const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
+const ONLY_TAB        = (process.env.MARKETPLACE    || '').trim();
+const RUN_MODE        = (process.env.RUN_MODE        || 'full').trim();
+const IDENTIFIERS_RAW = (process.env.IDENTIFIERS    || '').trim();
+const MARKETS_RAW     = (process.env.MARKETS        || 'ALL').trim();
+const TELEGRAM_CHAT   = (process.env.TELEGRAM_CHAT_ID || '').trim();
+const SKIP_SHEETS     = ['Summary', 'Template', 'Instructions', 'History'];
+const HISTORY_TAB     = 'History';
 const SEQUENTIAL_GROUP = ['Saudi Arabia', 'UAE'];
 
-// Random delay 2–5 seconds between checks
 const randomDelay = () => Math.floor(Math.random() * 3000) + 2000;
 
-// ─── UNAVAILABLE PHRASES (all Amazon languages) ────────────────────────────────
+// ─── UNAVAILABLE PHRASES ───────────────────────────────────────────────────────
 const UNAVAILABLE_PHRASES = [
   'currently unavailable', 'not available', 'this item is unavailable',
   'derzeit nicht verfügbar', 'nicht auf lager', 'nicht verfügbar',
@@ -40,25 +42,23 @@ const UNAVAILABLE_PHRASES = [
 ];
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
-// zipCode: set delivery location before checking — fixes proxy geolocation issues
-// Only Spain and Belgium have this for now — will expand after testing
 const MARKETPLACES = {
-  'USA':          { baseUrl: 'https://www.amazon.com',    proxy: '9.142.43.131:5301'   },
-  'Canada':       { baseUrl: 'https://www.amazon.ca',     proxy: '192.53.140.18:5114'  },
-  'UK':           { baseUrl: 'https://www.amazon.co.uk',  proxy: '212.212.19.48:6199'  },
-  'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  proxy: '212.212.18.216:6867' },
-  'Germany':      { baseUrl: 'https://www.amazon.de',     proxy: '166.0.42.187:6195'   },
-  'France':       { baseUrl: 'https://www.amazon.fr',     proxy: '31.98.4.142:7820'    },
-  'Belgium':      { baseUrl: 'https://www.amazon.com.be', proxy: '46.203.144.45:7812',  zipCode: '1000' },
-  'Netherlands':  { baseUrl: 'https://www.amazon.nl',     proxy: '104.253.199.5:5284'  },
-  'Spain':        { baseUrl: 'https://www.amazon.es',     proxy: '46.203.60.158:7158',  zipCode: '28001' },
-  'Italy':        { baseUrl: 'https://www.amazon.it',     proxy: '82.24.27.117:8089'   },
-  'Sweden':       { baseUrl: 'https://www.amazon.se',     proxy: '82.26.114.47:6749'   },
-  'Poland':       { baseUrl: 'https://www.amazon.pl',     proxy: '82.29.47.131:7855'   },
-  'Brazil':       { baseUrl: 'https://www.amazon.com.br', proxy: '192.53.142.66:5763'  },
-  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', proxy: '9.142.194.93:6761'   },
-  'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     proxy: '82.29.239.167:5315'  },
-  'UAE':          { baseUrl: 'https://www.amazon.ae',     proxy: '82.29.239.167:5315'  },
+  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301'   },
+  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114'  },
+  'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
+  'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867' },
+  'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
+  'France':       { baseUrl: 'https://www.amazon.fr',     flag: '🇫🇷', proxy: '31.98.4.142:7820'    },
+  'Belgium':      { baseUrl: 'https://www.amazon.com.be', flag: '🇧🇪', proxy: '46.203.144.45:7812', zipCode: '1000'  },
+  'Netherlands':  { baseUrl: 'https://www.amazon.nl',     flag: '🇳🇱', proxy: '104.253.199.5:5284'  },
+  'Spain':        { baseUrl: 'https://www.amazon.es',     flag: '🇪🇸', proxy: '46.203.60.158:7158', zipCode: '28001' },
+  'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089'   },
+  'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749'   },
+  'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855'   },
+  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763'  },
+  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761'   },
+  'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     flag: '🇸🇦', proxy: '82.29.239.167:5315'  },
+  'UAE':          { baseUrl: 'https://www.amazon.ae',     flag: '🇦🇪', proxy: '82.29.239.167:5315'  },
 };
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
@@ -67,6 +67,24 @@ const COLOR = {
   red:   { red: 0.918, green: 0.600, blue: 0.600 },
   amber: { red: 1.000, green: 0.898, blue: 0.600 },
 };
+
+// ─── HELPERS ───────────────────────────────────────────────────────────────────
+const sleep  = ms => new Promise(r => setTimeout(r, ms));
+const muTime = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
+
+// ─── SEND TELEGRAM MESSAGE ─────────────────────────────────────────────────────
+async function sendTelegram(chatId, text) {
+  if (!chatId || !TELEGRAM_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+    });
+  } catch (e) {
+    console.log('Telegram send error:', e.message);
+  }
+}
 
 // ─── GOOGLE SHEETS CLIENT ──────────────────────────────────────────────────────
 async function getSheetsClient() {
@@ -81,7 +99,6 @@ async function getSheetsClient() {
 // ─── APPLY CONDITIONAL FORMATTING ──────────────────────────────────────────────
 async function applyConditionalFormatting(sheets) {
   console.log('🎨 Setting up conditional formatting...');
-
   const meta = await sheets.spreadsheets.get({
     spreadsheetId: SHEET_ID,
     fields: 'sheets(properties(sheetId,title),conditionalFormats)',
@@ -133,26 +150,18 @@ async function applyConditionalFormatting(sheets) {
   }
 
   if (deleteRequests.length > 0) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: { requests: deleteRequests },
-    });
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { requests: deleteRequests } });
   }
   if (addRequests.length > 0) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: { requests: addRequests },
-    });
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { requests: addRequests } });
   }
-
   console.log('✅ Conditional formatting applied\n');
 }
 
-// ─── ENSURE HISTORY TAB EXISTS ─────────────────────────────────────────────────
+// ─── ENSURE HISTORY TAB ────────────────────────────────────────────────────────
 async function ensureHistoryTab(sheets) {
   const meta   = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   const exists = meta.data.sheets.some(s => s.properties.title === HISTORY_TAB);
-
   if (!exists) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
@@ -168,18 +177,14 @@ async function ensureHistoryTab(sheets) {
   }
 }
 
-// ─── APPEND TO HISTORY TAB ─────────────────────────────────────────────────────
+// ─── APPEND TO HISTORY ─────────────────────────────────────────────────────────
 async function appendToHistory(sheets, historyRows) {
   if (historyRows.length === 0) return;
-
   await sheets.spreadsheets.values.append({
-    spreadsheetId:    SHEET_ID,
-    range:            `'${HISTORY_TAB}'!A:G`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody:      { values: historyRows },
+    spreadsheetId: SHEET_ID, range: `'${HISTORY_TAB}'!A:G`,
+    valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: historyRows },
   });
-
   console.log(`   📋 ${historyRows.length} issue(s) logged to History tab`);
 }
 
@@ -195,7 +200,7 @@ async function getASINs(sheets, tabName) {
     spreadsheetId: SHEET_ID,
     range: `'${tabName}'!B:C`,
   });
-  const rows  = res.data.values || [];
+  const rows = res.data.values || [];
   const asins = [];
   for (let i = 1; i < rows.length; i++) {
     const asin = (rows[i][0] || '').trim();
@@ -205,7 +210,24 @@ async function getASINs(sheets, tabName) {
   return asins;
 }
 
-// ─── WRITE ONE ROW IMMEDIATELY ─────────────────────────────────────────────────
+// ─── READ ALL ASINs WITH SKUs FROM ALL TABS ────────────────────────────────────
+async function getAllASINsFromSheet(sheets, tabNames) {
+  const result = {};
+  for (const tabName of tabNames) {
+    if (SKIP_SHEETS.includes(tabName) || !MARKETPLACES[tabName]) continue;
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `'${tabName}'!B:C`,
+    });
+    const rows = (res.data.values || []).slice(1);
+    result[tabName] = rows
+      .filter(r => (r[0] || '').trim())
+      .map(r => ({ asin: (r[0] || '').trim(), sku: (r[1] || '').trim() }));
+  }
+  return result;
+}
+
+// ─── WRITE ONE ROW ─────────────────────────────────────────────────────────────
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -219,64 +241,21 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   });
 }
 
-// ─── SET DELIVERY LOCATION ─────────────────────────────────────────────────────
-// Tells Amazon which postcode to use for availability/buttons
-// Only called for marketplaces that have a zipCode defined
-async function setDeliveryLocation(page, baseUrl, zipCode) {
-  try {
-    // Step 1: Go to the homepage to get cookies/session
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-
-    // Step 2: Use Amazon's location change endpoint
-    await page.evaluate(async (baseUrl, zipCode) => {
-      await fetch(`${baseUrl}/portal-migration/hz/glow/address-change`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          locationType:   'LOCATION_INPUT',
-          zipCode:        zipCode,
-          storeContext:   'generic',
-          deviceType:     'web',
-          pageType:       'Gateway',
-          actionSource:   'glow',
-        }),
-        credentials: 'include',
-      });
-    }, baseUrl, zipCode);
-
-    // Wait a moment for Amazon to register the location
-    await sleep(1500);
-    console.log(`      📍 Delivery location set to ${zipCode}`);
-
-  } catch (err) {
-    // Non-fatal — if this fails, page check will still run
-    console.log(`      ⚠ Could not set delivery location: ${err.message}`);
-  }
-}
-
 // ─── CHECK A SINGLE AMAZON PAGE ────────────────────────────────────────────────
 async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
   const page = await browser.newPage();
-
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
-
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       window.chrome = { runtime: {} };
     });
 
     if (isMobile) {
-      await page.setUserAgent(
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ' +
-        'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-      );
+      await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1');
       await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     } else {
-      await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-      );
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1366, height: 768 });
     }
 
@@ -286,71 +265,47 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       'Accept-Encoding': 'gzip, deflate, br',
     });
 
-    // Set delivery location BEFORE loading the product page (Spain + Belgium only)
     if (zipCode && !isMobile) {
-      await setDeliveryLocation(page, baseUrl, zipCode);
+      try {
+        await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await page.evaluate(async (baseUrl, zipCode) => {
+          await fetch(`${baseUrl}/portal-migration/hz/glow/address-change`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ locationType: 'LOCATION_INPUT', zipCode, storeContext: 'generic', deviceType: 'web', pageType: 'Gateway', actionSource: 'glow' }),
+            credentials: 'include',
+          });
+        }, baseUrl, zipCode);
+        await sleep(1500);
+      } catch (e) {}
     }
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForSelector('#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page', { timeout: 8000 }).catch(() => {});
 
-    await page.waitForSelector(
-      '#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page',
-      { timeout: 8000 }
-    ).catch(() => {});
-
-    // CAPTCHA check
     const pageTitle   = await page.title().catch(() => '');
-    const bodySnippet = await page.evaluate(
-      () => (document.body ? document.body.innerText.substring(0, 600) : '')
-    ).catch(() => '');
+    const bodySnippet = await page.evaluate(() => document.body ? document.body.innerText.substring(0, 600) : '').catch(() => '');
+    const isBlocked   = /robot|captcha|verify|sorry|unusual traffic/i.test(pageTitle) || /enter the characters|type the characters|are you a human/i.test(bodySnippet);
+    if (isBlocked) return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
 
-    const isBlocked = (
-      /robot|captcha|verify|sorry|unusual traffic/i.test(pageTitle) ||
-      /enter the characters|type the characters|are you a human/i.test(bodySnippet)
-    );
-
-    if (isBlocked) {
-      return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
-    }
-
-    // Unavailability check
-    const availabilityText = await page.evaluate(() => {
+    const availText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.toLowerCase().trim() : '';
     }).catch(() => '');
 
     const hasPurchaseBox = await page.evaluate(() => !!(
-      document.querySelector('#buybox')             ||
-      document.querySelector('#desktop_buybox')     ||
-      document.querySelector('#newAccordionRow')     ||
-      document.querySelector('#add-to-cart-button') ||
+      document.querySelector('#buybox') || document.querySelector('#desktop_buybox') ||
+      document.querySelector('#newAccordionRow') || document.querySelector('#add-to-cart-button') ||
       document.querySelector('#buy-now-button')
     )).catch(() => false);
 
-    const isUnavailable = (
-      UNAVAILABLE_PHRASES.some(phrase => availabilityText.includes(phrase)) ||
-      !hasPurchaseBox
-    );
-
+    const isUnavailable = UNAVAILABLE_PHRASES.some(p => availText.includes(p)) || !hasPurchaseBox;
     if (isUnavailable) {
-      return {
-        atc:           'Missing ❌',
-        buy:           'Missing ❌',
-        stock:         availabilityText.substring(0, 60) || 'Unavailable',
-        isBlocked:     false,
-        isUnavailable: true,
-      };
+      return { atc: 'Missing ❌', buy: 'Missing ❌', stock: availText.substring(0, 60) || 'Unavailable', isBlocked: false, isUnavailable: true };
     }
 
-    // Tightened button detection — exact IDs only
-    const hasATC = await page.evaluate(() =>
-      !!(document.querySelector('#add-to-cart-button'))
-    ).catch(() => false);
-
-    const hasBuy = await page.evaluate(() =>
-      !!(document.querySelector('#buy-now-button'))
-    ).catch(() => false);
-
+    const hasATC = await page.evaluate(() => !!document.querySelector('#add-to-cart-button')).catch(() => false);
+    const hasBuy = await page.evaluate(() => !!document.querySelector('#buy-now-button')).catch(() => false);
     const stockText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
@@ -363,22 +318,20 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       isBlocked:     false,
       isUnavailable: false,
     };
-
   } catch (err) {
     const msg = (err.message || '').substring(0, 60);
     return { atc: 'Error', buy: 'Error', stock: msg, isBlocked: false, isUnavailable: false };
-
   } finally {
     await page.close().catch(() => {});
   }
 }
 
-// ─── PROCESS ONE MARKETPLACE TAB ──────────────────────────────────────────────
+// ─── PROCESS ONE MARKETPLACE TAB (full run) ────────────────────────────────────
 async function processTab(sheets, tabName, today, now) {
   const marketplace = MARKETPLACES[tabName];
 
   console.log(`\n${'─'.repeat(50)}`);
-  console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}${marketplace.zipCode ? '  📍 ' + marketplace.zipCode : ''}`);
+  console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}`);
   console.log(`${'─'.repeat(50)}`);
 
   const asins = await getASINs(sheets, tabName);
@@ -389,15 +342,12 @@ async function processTab(sheets, tabName, today, now) {
   console.log(`   [${tabName}] ${asins.length} ASINs to check`);
 
   const [proxyHost, proxyPort] = marketplace.proxy.split(':');
-
   const browser = await puppeteer.launch({
     headless: 'new',
     args: [
       `--proxy-server=http://${proxyHost}:${proxyPort}`,
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
+      '--no-sandbox', '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', '--disable-gpu',
       '--disable-blink-features=AutomationControlled',
       '--window-size=1366,768',
     ],
@@ -412,10 +362,10 @@ async function processTab(sheets, tabName, today, now) {
     const url       = `${marketplace.baseUrl}/dp/${asin}`;
     const checkedAt = muTime();
 
-    // Pass baseUrl and zipCode so checkPage can set delivery location if needed
+    process.stdout.write(`   [${tabName}] ${asin}  `);
+
     const desktop = await checkPage(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
-
     const mobile = await checkPage(browser, url, true, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
@@ -423,33 +373,20 @@ async function processTab(sheets, tabName, today, now) {
     let notes = '';
 
     if (desktop.isBlocked) {
-      alert = '⚠️ BLOCKED';
-      notes = 'Amazon blocked this check';
-      totalBlocked++;
+      alert = '⚠️ BLOCKED'; notes = 'Amazon blocked this check'; totalBlocked++;
     } else if (desktop.atc === 'Error') {
-      alert = '⚠️ ERROR';
-      notes = desktop.stock;
-      totalErrors++;
+      alert = '⚠️ ERROR'; notes = desktop.stock; totalErrors++;
     } else if (desktop.isUnavailable) {
-      alert = '🔴 UNAVAILABLE';
-      notes = desktop.stock || 'Listing unavailable';
+      alert = '🔴 UNAVAILABLE'; notes = desktop.stock || 'Listing unavailable';
     } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
       alert = '✅ LIVE';
     } else {
-      alert = '🔴 NO BUTTONS';
-      notes = desktop.stock || 'No ATC or Buy Now found';
+      alert = '🔴 NO BUTTONS'; notes = desktop.stock || 'No ATC or Buy Now found';
     }
 
-    console.log(
-      `   [${tabName}] ${asin} | ` +
-      `D: ATC=${desktop.atc} Buy=${desktop.buy} | ` +
-      `M: ATC=${mobile.atc} Buy=${mobile.buy} | ${alert}`
-    );
+    console.log(`D: ATC=${desktop.atc} Buy=${desktop.buy} | M: ATC=${mobile.atc} Buy=${mobile.buy} | ${alert}`);
 
-    const dToJ = [
-      desktop.atc, desktop.buy, mobile.atc, mobile.buy,
-      notes, checkedAt, url,
-    ];
+    const dToJ = [desktop.atc, desktop.buy, mobile.atc, mobile.buy, notes, checkedAt, url];
     const lToM = [desktop.stock, alert];
 
     try {
@@ -458,25 +395,113 @@ async function processTab(sheets, tabName, today, now) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
     }
 
-    if (alert !== '✅ LIVE') {
-      historyRows.push([today, now, tabName, asin, sku, alert, notes]);
-    }
-
+    historyRows.push([today, now, tabName, asin, sku, alert, notes]);
     summary.push({ marketplace: tabName, asin, sku, alert, notes });
   }
 
   await browser.close().catch(() => {});
   console.log(`   ✅ [${tabName}] complete`);
-
   return { summary, historyRows, totalBlocked, totalErrors };
+}
+
+// ─── SPOT CHECK MODE ───────────────────────────────────────────────────────────
+async function runSpotCheck(sheets) {
+  const identifiers = IDENTIFIERS_RAW.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  const allTabs     = await getTabNames(sheets);
+
+  // Which marketplaces to check
+  let marketsToCheck;
+  if (MARKETS_RAW === 'ALL' || !MARKETS_RAW) {
+    marketsToCheck = allTabs.filter(t => !SKIP_SHEETS.includes(t) && MARKETPLACES[t]);
+  } else {
+    marketsToCheck = MARKETS_RAW.split(',').map(s => s.trim()).filter(m => MARKETPLACES[m]);
+  }
+
+  console.log(`🔍 Spot check: ${identifiers.join(', ')} across ${marketsToCheck.join(', ')}`);
+
+  // Load all ASINs from relevant tabs
+  const sheetData = await getAllASINsFromSheet(sheets, marketsToCheck);
+
+  const results    = [];
+  const historyRows = [];
+  const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
+  const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
+
+  for (const market of marketsToCheck) {
+    const config   = MARKETPLACES[market];
+    const tabItems = sheetData[market] || [];
+
+    // Find matches for any of the identifiers
+    const matches = [];
+    for (const identifier of identifiers) {
+      const match = tabItems.find(item =>
+        item.asin.toUpperCase() === identifier || item.sku.toUpperCase() === identifier
+      );
+      if (match) matches.push({ ...match, identifier });
+      else results.push({ market, identifier, asin: '?', sku: '?', status: '❓ NOT FOUND', detail: 'Not in sheet for this marketplace' });
+    }
+
+    if (matches.length === 0) continue;
+
+    const [proxyHost, proxyPort] = config.proxy.split(':');
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        `--proxy-server=http://${proxyHost}:${proxyPort}`,
+        '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+      ],
+    });
+
+    for (const { asin, sku, identifier } of matches) {
+      const url     = `${config.baseUrl}/dp/${asin}`;
+      const desktop = await checkPage(browser, url, false, config.baseUrl, config.zipCode);
+      await sleep(randomDelay());
+
+      let status = '';
+      let detail = '';
+
+      if (desktop.isBlocked)      { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
+      else if (desktop.atc === 'Error') { status = '⚠️ ERROR'; detail = desktop.stock; }
+      else if (desktop.isUnavailable)   { status = '🔴 UNAVAILABLE'; detail = desktop.stock || 'Unavailable'; }
+      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { status = '✅ LIVE'; detail = desktop.stock; }
+      else { status = '🔴 NO BUTTONS'; detail = desktop.stock || 'No buttons found'; }
+
+      results.push({ market, identifier, asin, sku, status, detail });
+      historyRows.push([today, now, market, asin, sku, status, detail + ' (spot check)']);
+
+      console.log(`   [${market}] ${identifier} (${asin}) → ${status}`);
+      await sleep(randomDelay());
+    }
+
+    await browser.close().catch(() => {});
+  }
+
+  // Write to history tab
+  await appendToHistory(sheets, historyRows);
+
+  // Format and send Telegram message
+  let msg = `📋 <b>Spot Check Results</b> — ${muTime()}\n${'─'.repeat(30)}\n`;
+  for (const r of results) {
+    const flag = MARKETPLACES[r.market]?.flag || '🌐';
+    msg += `\n${flag} <b>${r.market}</b>\n`;
+    msg += `  ${r.identifier} → ${r.status}\n`;
+    if (r.detail) msg += `  <i>${r.detail}</i>\n`;
+  }
+
+  if (TELEGRAM_CHAT) {
+    await sendTelegram(TELEGRAM_CHAT, msg);
+    console.log(`📱 Results sent to Telegram chat ${TELEGRAM_CHAT}`);
+  } else {
+    console.log('No Telegram chat ID — results logged to console only');
+    console.log(msg);
+  }
 }
 
 // ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
 async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime) {
-  if (!GMAIL_USER || !GMAIL_PASS) {
-    console.log('   (no email credentials — skipping email)');
-    return;
-  }
+  if (!GMAIL_USER || !GMAIL_PASS) return;
 
   const duration  = Math.round((Date.now() - startTime) / 60000);
   const issues    = summary.filter(r => r.alert !== '✅ LIVE');
@@ -490,19 +515,17 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     </tr>`
   ).join('');
 
-  const scope = ONLY_TAB ? `${ONLY_TAB} only` : 'all marketplaces';
-
   const html = `
     <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — ${muTime()}</h2>
     <p style="font-family:Arial,sans-serif">
-      ✅ <strong>${totalChecked}</strong> ASINs checked (${scope})<br>
+      ✅ <strong>${totalChecked}</strong> ASINs checked<br>
       ⏱ Completed in <strong>${duration} minutes</strong><br>
-      ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked by Amazon<br>` : ''}
-      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`           : ''}
+      ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked<br>` : ''}
+      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`   : ''}
     </p>
     ${issues.length === 0
-      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All listings are LIVE — no issues found!</p>`
-      : `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s) need attention:</h3>
+      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All listings LIVE — no issues!</p>`
+      : `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s):</h3>
          <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">
            <tr style="background:#f0f0f0">
              <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
@@ -521,11 +544,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       </a>
     </p>`;
 
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-  });
-
+  const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
   await transporter.sendMail({
     from:    `Amazon Checker <${GMAIL_USER}>`,
     to:      GMAIL_USER,
@@ -534,32 +553,30 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`,
     html,
   });
-
-  console.log(`   📧 Email sent to ${GMAIL_USER}`);
+  console.log(`   📧 Email sent`);
 }
-
-// ─── HELPERS ───────────────────────────────────────────────────────────────────
-const sleep  = ms => new Promise(r => setTimeout(r, ms));
-const muTime = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────────
 async function main() {
   const startTime = Date.now();
 
   console.log(`\n${'═'.repeat(60)}`);
-  console.log(ONLY_TAB
-    ? `  🚀  Amazon Check — ${ONLY_TAB} only — ${muTime()}`
-    : `  🚀  Amazon Check — ALL tabs PARALLEL — ${muTime()}`
-  );
+  console.log(`  🚀  Mode: ${RUN_MODE.toUpperCase()} — ${muTime()}`);
   console.log(`${'═'.repeat(60)}\n`);
 
   const sheets = await getSheetsClient();
 
+  // ── SPOT CHECK MODE ────────────────────────────────────────────────────────
+  if (RUN_MODE === 'spotcheck' && IDENTIFIERS_RAW) {
+    await runSpotCheck(sheets);
+    return;
+  }
+
+  // ── FULL RUN MODE ──────────────────────────────────────────────────────────
   await applyConditionalFormatting(sheets);
   await ensureHistoryTab(sheets);
 
   const allTabs = await getTabNames(sheets);
-
   const tabsToRun = allTabs.filter(t => {
     if (SKIP_SHEETS.includes(t)) return false;
     if (!MARKETPLACES[t]) return false;
@@ -574,19 +591,12 @@ async function main() {
   const sequentialTabs = tabsToRun.filter(t =>  SEQUENTIAL_GROUP.includes(t));
 
   console.log(`🔀 Running ${parallelTabs.length} tabs in parallel`);
-  if (sequentialTabs.length > 0) {
-    console.log(`🔁 Running ${sequentialTabs.length} tab(s) sequentially (shared IP): ${sequentialTabs.join(', ')}`);
-  }
-  console.log();
+  if (sequentialTabs.length > 0) console.log(`🔁 Sequential (shared IP): ${sequentialTabs.join(', ')}`);
 
-  const parallelResults = await Promise.all(
-    parallelTabs.map(tabName => processTab(sheets, tabName, today, now))
-  );
-
+  const parallelResults = await Promise.all(parallelTabs.map(t => processTab(sheets, t, today, now)));
   const sequentialResults = [];
-  for (const tabName of sequentialTabs) {
-    const result = await processTab(sheets, tabName, today, now);
-    sequentialResults.push(result);
+  for (const t of sequentialTabs) {
+    sequentialResults.push(await processTab(sheets, t, today, now));
   }
 
   const allResults   = [...parallelResults, ...sequentialResults];
@@ -602,15 +612,13 @@ async function main() {
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`  ✅  All done — ${muTime()}`);
   console.log(`  📊  ${totalChecked} ASINs checked`);
-  if (totalBlocked > 0) console.log(`  ⚠️   ${totalBlocked} blocked by Amazon`);
+  if (totalBlocked > 0) console.log(`  ⚠️   ${totalBlocked} blocked`);
   if (totalErrors  > 0) console.log(`  ❌  ${totalErrors} errors`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  console.log('📧 Sending email summary...');
   await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime);
 }
 
-// ─── RUN ───────────────────────────────────────────────────────────────────────
 main().catch(err => {
   console.error('\n❌ Fatal error:', err);
   process.exit(1);
