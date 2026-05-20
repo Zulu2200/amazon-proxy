@@ -57,22 +57,22 @@ const UNAVAILABLE_PHRASES = [
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
-  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301'   },
-  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114'  },
-  'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
-  'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867' },
-  'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
-  'France':       { baseUrl: 'https://www.amazon.fr',     flag: '🇫🇷', proxy: '31.98.4.142:7820'    },
-  'Belgium':      { baseUrl: 'https://www.amazon.com.be', flag: '🇧🇪', proxy: '46.203.144.45:7812', zipCode: '1000'  },
-  'Netherlands':  { baseUrl: 'https://www.amazon.nl',     flag: '🇳🇱', proxy: '104.253.199.5:5284'  },
-  'Spain':        { baseUrl: 'https://www.amazon.es',     flag: '🇪🇸', proxy: '46.203.60.158:7158', zipCode: '28001' },
-  'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089'   },
-  'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749'   },
-  'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855'   },
-  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763'  },
-  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761'   },
-  'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     flag: '🇸🇦', proxy: '82.29.239.167:5315'  },
-  'UAE':          { baseUrl: 'https://www.amazon.ae',     flag: '🇦🇪', proxy: '82.29.239.167:5315'  },
+  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301',   zipCode: '10001'    },
+  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114',  zipCode: 'M5V0A1'  },
+  'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199',  zipCode: 'W1A1AA'  },
+  'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867', zipCode: 'D01'     },
+  'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195',   zipCode: '10115'   },
+  'France':       { baseUrl: 'https://www.amazon.fr',     flag: '🇫🇷', proxy: '31.98.4.142:7820',    zipCode: '75001'   },
+  'Belgium':      { baseUrl: 'https://www.amazon.com.be', flag: '🇧🇪', proxy: '46.203.144.45:7812',  zipCode: '1000'    },
+  'Netherlands':  { baseUrl: 'https://www.amazon.nl',     flag: '🇳🇱', proxy: '104.253.199.5:5284',  zipCode: '1011'    },
+  'Spain':        { baseUrl: 'https://www.amazon.es',     flag: '🇪🇸', proxy: '46.203.60.158:7158',  zipCode: '28001'   },
+  'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089',   zipCode: '00100'   },
+  'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749',   zipCode: '11120'   },
+  'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855',   zipCode: '00001'   },
+  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763',  zipCode: '01310100'},
+  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761',   zipCode: '06600'   },
+  'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     flag: '🇸🇦', proxy: '82.29.239.167:5315',  zipCode: '11564'   },
+  'UAE':          { baseUrl: 'https://www.amazon.ae',     flag: '🇦🇪', proxy: '82.29.239.167:5315',  zipCode: '00000'   },
 };
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
