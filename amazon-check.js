@@ -19,9 +19,16 @@ const ONLY_TAB        = (process.env.MARKETPLACE     || '').trim();
 const RUN_MODE        = (process.env.RUN_MODE         || 'full').trim();
 const IDENTIFIERS_RAW = (process.env.IDENTIFIERS     || '').trim();
 const MARKETS_RAW     = (process.env.MARKETS         || 'ALL').trim();
+const RUN_SOURCE      = (process.env.RUN_SOURCE || 'github').trim();
 const SKIP_SHEETS     = ['Summary', 'Template', 'Instructions', 'History'];
 const HISTORY_TAB     = 'History';
 const SHEET_URL       = `https://docs.google.com/spreadsheets/d/${SHEET_ID}`;
+
+// Source label for notifications
+const sourceLabel = () => {
+  const icons = { telegram: '📱 Telegram', sheet: '📊 Google Sheet', github: '🌐 GitHub', automatic: '⏰ Automatic' };
+  return icons[RUN_SOURCE] || '🌐 GitHub';
+};
 
 // Saudi Arabia runs in parallel with others; UAE runs after Saudi Arabia
 // (they share the same IP so can't run simultaneously)
@@ -666,7 +673,7 @@ async function main() {
 
   // Send start notification
   await sendTelegram(
-    `🚀 <b>Check started!</b>\n\n📦 Running: <i>${scope}</i>\nResults will arrive here + email when done.`
+    `🚀 <b>Check started!</b>\n\n📦 Running: <i>${scope}</i>\n📌 Triggered from: ${sourceLabel()}\nResults will arrive here + email when done.`
   );
 
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
