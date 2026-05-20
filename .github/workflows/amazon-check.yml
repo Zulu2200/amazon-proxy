@@ -1,11 +1,8 @@
 name: Amazon Listing Check
 
 on:
-  # 5:00am Mauritius time = 1:00am UTC
-  schedule:
-    - cron: '0 1 * * *'
-
-  # Manual trigger — from GitHub, Google Sheet button, or Telegram bot
+  # Manual trigger only — scheduling handled by cron-job.org (reliable 5am MRU)
+  # GitHub's built-in scheduler was unreliable so it has been disabled
   workflow_dispatch:
     inputs:
       marketplace:
