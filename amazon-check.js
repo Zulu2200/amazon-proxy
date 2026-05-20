@@ -86,12 +86,8 @@ const COLOR = {
 const sleep  = ms => new Promise(r => setTimeout(r, ms));
 const muTime = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
 
-// ─── SEND TELEGRAM MESSAGE ─────────────────────────────────────────────────────
-async function sendTelegram(text, chatId = TELEGRAM_CHAT) {
-  if (!chatId || !TELEGRAM_TOKEN) {
-    console.log('⚠️ Telegram not configured — skipping message');
-    return;
-  }
+// ─── SEND TELEGRAM MESSAGE (auto-splits if over 4096 chars) ──────────────────
+async function sendTelegramChunk(text, chatId) {
   try {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method:  'POST',
@@ -100,13 +96,38 @@ async function sendTelegram(text, chatId = TELEGRAM_CHAT) {
     });
     const data = await res.json();
     if (!data.ok) {
-      console.log('⚠️ Telegram API error:', JSON.stringify(data));
+      console.log('Telegram API error:', JSON.stringify(data));
     } else {
-      console.log('📱 Telegram message sent');
+      console.log('Telegram message sent');
     }
   } catch (e) {
-    console.log('⚠️ Telegram send error:', e.message);
+    console.log('Telegram send error:', e.message);
   }
+}
+
+async function sendTelegram(text, chatId = TELEGRAM_CHAT) {
+  if (!chatId || !TELEGRAM_TOKEN) {
+    console.log('Telegram not configured - skipping');
+    return;
+  }
+  const MAX = 4000;
+  if (text.length <= MAX) {
+    await sendTelegramChunk(text, chatId);
+    return;
+  }
+  const lines = text.split('\n');
+  let chunk = '';
+  let part  = 1;
+  for (const line of lines) {
+    if ((chunk + '\n' + line).length > MAX) {
+      await sendTelegramChunk(chunk + '\n<i>(continued...)</i>', chatId);
+      chunk = '<i>(part ' + (++part) + ')</i>\n' + line;
+      await new Promise(r => setTimeout(r, 500));
+    } else {
+      chunk = chunk ? chunk + '\n' + line : line;
+    }
+  }
+  if (chunk) await sendTelegramChunk(chunk, chatId);
 }
 
 // ─── GOOGLE SHEETS CLIENT ──────────────────────────────────────────────────────
