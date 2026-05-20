@@ -27,7 +27,7 @@ on:
       chat_id:
         description: 'Telegram chat ID to send spot check results back to'
         required: false
-        default: ''
+        default: '435507536'
 
 jobs:
   check-listings:
