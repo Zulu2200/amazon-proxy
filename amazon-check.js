@@ -641,6 +641,17 @@ async function main() {
 
   const sheets = await getSheetsClient();
 
+  // ── SEND START NOTIFICATION to Telegram ───────────────────────────────────
+  if (RUN_MODE === 'spotcheck' && IDENTIFIERS_RAW) {
+    // Spot check start notification is handled in runSpotCheck
+  } else {
+    const scope = ONLY_TAB ? ONLY_TAB : 'all 16 marketplaces';
+    await sendTelegram(
+      `🚀 <b>Check started!</b>\n\nRunning: <i>${scope}</i>\nResults will arrive here + email when done.`,
+      TELEGRAM_CHAT
+    );
+  }
+
   // ── SPOT CHECK MODE ────────────────────────────────────────────────────────
   if (RUN_MODE === 'spotcheck' && IDENTIFIERS_RAW) {
     await runSpotCheck(sheets, TELEGRAM_CHAT);
