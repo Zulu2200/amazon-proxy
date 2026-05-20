@@ -1,8 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //  AMAZON LISTING CHECKER — Puppeteer + Google Sheets
-//  Supports two modes:
-//  1. full  — checks all/specific marketplace tabs, updates sheet + email
-//  2. spotcheck — checks specific ASINs/SKUs, sends results to Telegram only
+//  Two modes:
+//  1. full      — checks marketplace tabs, updates sheet + history, email + Telegram
+//  2. spotcheck — checks specific ASINs/SKUs, history only, Telegram only
+//
+//  Column K (Manual Check Notes) logic:
+//  - CLOSED / OOS (any case) → suppress from email/Telegram alerts
+//  - BUT if CLOSED/OOS listing is now LIVE → send URGENT alert
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const puppeteer  = require('puppeteer');
@@ -16,11 +20,11 @@ const PROXY_PASS      = process.env.PROXY_PASS;
 const GMAIL_USER      = process.env.GMAIL_USER;
 const GMAIL_PASS      = process.env.GMAIL_PASS;
 const TELEGRAM_TOKEN  = process.env.TELEGRAM_TOKEN;
-const ONLY_TAB        = (process.env.MARKETPLACE    || '').trim();
-const RUN_MODE        = (process.env.RUN_MODE        || 'full').trim();
-const IDENTIFIERS_RAW = (process.env.IDENTIFIERS    || '').trim();
-const MARKETS_RAW     = (process.env.MARKETS        || 'ALL').trim();
-const TELEGRAM_CHAT   = (process.env.TELEGRAM_CHAT_ID || '').trim();
+const TELEGRAM_CHAT   = (process.env.TELEGRAM_CHAT_ID || '435507536').trim();
+const ONLY_TAB        = (process.env.MARKETPLACE     || '').trim();
+const RUN_MODE        = (process.env.RUN_MODE         || 'full').trim();
+const IDENTIFIERS_RAW = (process.env.IDENTIFIERS     || '').trim();
+const MARKETS_RAW     = (process.env.MARKETS         || 'ALL').trim();
 const SKIP_SHEETS     = ['Summary', 'Template', 'Instructions', 'History'];
 const HISTORY_TAB     = 'History';
 const SEQUENTIAL_GROUP = ['Saudi Arabia', 'UAE'];
@@ -69,18 +73,20 @@ const COLOR = {
 };
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
-const sleep  = ms => new Promise(r => setTimeout(r, ms));
-const muTime = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
+const sleep    = ms  => new Promise(r => setTimeout(r, ms));
+const muTime   = ()  => new Date().toLocaleString('en-GB', { timeZone: 'Indian/Mauritius' });
+const isClosedOrOOS = note => /^(closed|oos)$/i.test((note || '').trim());
 
 // ─── SEND TELEGRAM MESSAGE ─────────────────────────────────────────────────────
-async function sendTelegram(chatId, text) {
+async function sendTelegram(text, chatId = TELEGRAM_CHAT) {
   if (!chatId || !TELEGRAM_TOKEN) return;
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
     });
+    if (!res.ok) console.log('Telegram error:', await res.text());
   } catch (e) {
     console.log('Telegram send error:', e.message);
   }
@@ -185,7 +191,7 @@ async function appendToHistory(sheets, historyRows) {
     valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
     requestBody: { values: historyRows },
   });
-  console.log(`   📋 ${historyRows.length} issue(s) logged to History tab`);
+  console.log(`   📋 ${historyRows.length} row(s) logged to History tab`);
 }
 
 // ─── GET ALL TAB NAMES ─────────────────────────────────────────────────────────
@@ -194,23 +200,24 @@ async function getTabNames(sheets) {
   return meta.data.sheets.map(s => s.properties.title);
 }
 
-// ─── READ ASINs AND SKUs ───────────────────────────────────────────────────────
+// ─── READ ASINs, SKUs AND MANUAL NOTES ────────────────────────────────────────
 async function getASINs(sheets, tabName) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${tabName}'!B:C`,
+    range: `'${tabName}'!B:K`,
   });
   const rows = res.data.values || [];
   const asins = [];
   for (let i = 1; i < rows.length; i++) {
-    const asin = (rows[i][0] || '').trim();
-    const sku  = (rows[i][1] || '').trim();
-    if (asin) asins.push({ asin, sku, sheetRow: i + 1 });
+    const asin       = (rows[i][0] || '').trim();
+    const sku        = (rows[i][1] || '').trim();
+    const manualNote = (rows[i][9] || '').trim(); // column K
+    if (asin) asins.push({ asin, sku, manualNote, sheetRow: i + 1 });
   }
   return asins;
 }
 
-// ─── READ ALL ASINs WITH SKUs FROM ALL TABS ────────────────────────────────────
+// ─── READ ALL ASINs FROM ALL TABS (for spot check) ────────────────────────────
 async function getAllASINsFromSheet(sheets, tabNames) {
   const result = {};
   for (const tabName of tabNames) {
@@ -304,8 +311,8 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       return { atc: 'Missing ❌', buy: 'Missing ❌', stock: availText.substring(0, 60) || 'Unavailable', isBlocked: false, isUnavailable: true };
     }
 
-    const hasATC = await page.evaluate(() => !!document.querySelector('#add-to-cart-button')).catch(() => false);
-    const hasBuy = await page.evaluate(() => !!document.querySelector('#buy-now-button')).catch(() => false);
+    const hasATC    = await page.evaluate(() => !!document.querySelector('#add-to-cart-button')).catch(() => false);
+    const hasBuy    = await page.evaluate(() => !!document.querySelector('#buy-now-button')).catch(() => false);
     const stockText = await page.evaluate(() => {
       const el = document.querySelector('#availability, #availability_feature_div');
       return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
@@ -319,14 +326,13 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       isUnavailable: false,
     };
   } catch (err) {
-    const msg = (err.message || '').substring(0, 60);
-    return { atc: 'Error', buy: 'Error', stock: msg, isBlocked: false, isUnavailable: false };
+    return { atc: 'Error', buy: 'Error', stock: (err.message || '').substring(0, 60), isBlocked: false, isUnavailable: false };
   } finally {
     await page.close().catch(() => {});
   }
 }
 
-// ─── PROCESS ONE MARKETPLACE TAB (full run) ────────────────────────────────────
+// ─── PROCESS ONE FULL MARKETPLACE TAB ─────────────────────────────────────────
 async function processTab(sheets, tabName, today, now) {
   const marketplace = MARKETPLACES[tabName];
 
@@ -358,19 +364,21 @@ async function processTab(sheets, tabName, today, now) {
   let totalBlocked  = 0;
   let totalErrors   = 0;
 
-  for (const { asin, sku, sheetRow } of asins) {
+  for (const { asin, sku, manualNote, sheetRow } of asins) {
     const url       = `${marketplace.baseUrl}/dp/${asin}`;
     const checkedAt = muTime();
+    const isClosed  = isClosedOrOOS(manualNote);
 
-    process.stdout.write(`   [${tabName}] ${asin}  `);
+    process.stdout.write(`   [${tabName}] ${asin}${isClosed ? ' [CLOSED/OOS]' : ''}  `);
 
     const desktop = await checkPage(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
-    const mobile = await checkPage(browser, url, true, marketplace.baseUrl, marketplace.zipCode);
+    const mobile  = await checkPage(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
     let alert = '';
     let notes = '';
+    let reactivated = false; // was CLOSED/OOS but now LIVE
 
     if (desktop.isBlocked) {
       alert = '⚠️ BLOCKED'; notes = 'Amazon blocked this check'; totalBlocked++;
@@ -380,6 +388,12 @@ async function processTab(sheets, tabName, today, now) {
       alert = '🔴 UNAVAILABLE'; notes = desktop.stock || 'Listing unavailable';
     } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
       alert = '✅ LIVE';
+      // Special case: was marked CLOSED/OOS but is now LIVE!
+      if (isClosed) {
+        reactivated = true;
+        alert = '🟢 REACTIVATED';
+        notes = `Was marked ${manualNote.toUpperCase()} but is now LIVE!`;
+      }
     } else {
       alert = '🔴 NO BUTTONS'; notes = desktop.stock || 'No ATC or Buy Now found';
     }
@@ -395,8 +409,16 @@ async function processTab(sheets, tabName, today, now) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
     }
 
+    // Always log to history
     historyRows.push([today, now, tabName, asin, sku, alert, notes]);
-    summary.push({ marketplace: tabName, asin, sku, alert, notes });
+
+    // Add to summary — but suppress CLOSED/OOS from alerts UNLESS reactivated
+    summary.push({
+      marketplace: tabName,
+      asin, sku, alert, notes,
+      suppress:    isClosed && !reactivated, // suppress in email/Telegram if CLOSED/OOS and not reactivated
+      reactivated,
+    });
   }
 
   await browser.close().catch(() => {});
@@ -405,11 +427,10 @@ async function processTab(sheets, tabName, today, now) {
 }
 
 // ─── SPOT CHECK MODE ───────────────────────────────────────────────────────────
-async function runSpotCheck(sheets) {
+async function runSpotCheck(sheets, telegramChatId) {
   const identifiers = IDENTIFIERS_RAW.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   const allTabs     = await getTabNames(sheets);
 
-  // Which marketplaces to check
   let marketsToCheck;
   if (MARKETS_RAW === 'ALL' || !MARKETS_RAW) {
     marketsToCheck = allTabs.filter(t => !SKIP_SHEETS.includes(t) && MARKETPLACES[t]);
@@ -419,10 +440,8 @@ async function runSpotCheck(sheets) {
 
   console.log(`🔍 Spot check: ${identifiers.join(', ')} across ${marketsToCheck.join(', ')}`);
 
-  // Load all ASINs from relevant tabs
-  const sheetData = await getAllASINsFromSheet(sheets, marketsToCheck);
-
-  const results    = [];
+  const sheetData   = await getAllASINsFromSheet(sheets, marketsToCheck);
+  const results     = [];
   const historyRows = [];
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
   const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
@@ -431,7 +450,6 @@ async function runSpotCheck(sheets) {
     const config   = MARKETPLACES[market];
     const tabItems = sheetData[market] || [];
 
-    // Find matches for any of the identifiers
     const matches = [];
     for (const identifier of identifiers) {
       const match = tabItems.find(item =>
@@ -462,14 +480,15 @@ async function runSpotCheck(sheets) {
       let status = '';
       let detail = '';
 
-      if (desktop.isBlocked)      { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
-      else if (desktop.atc === 'Error') { status = '⚠️ ERROR'; detail = desktop.stock; }
+      if (desktop.isBlocked)           { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
+      else if (desktop.atc === 'Error') { status = '⚠️ ERROR';       detail = desktop.stock; }
       else if (desktop.isUnavailable)   { status = '🔴 UNAVAILABLE'; detail = desktop.stock || 'Unavailable'; }
       else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { status = '✅ LIVE'; detail = desktop.stock; }
-      else { status = '🔴 NO BUTTONS'; detail = desktop.stock || 'No buttons found'; }
+      else                              { status = '🔴 NO BUTTONS';  detail = desktop.stock || 'No buttons found'; }
 
       results.push({ market, identifier, asin, sku, status, detail });
-      historyRows.push([today, now, market, asin, sku, status, detail + ' (spot check)']);
+      // Spot check — always log to history, never update sheet
+      historyRows.push([today, now, market, asin, sku, status, (detail || '') + ' (spot check)']);
 
       console.log(`   [${market}] ${identifier} (${asin}) → ${status}`);
       await sleep(randomDelay());
@@ -478,10 +497,10 @@ async function runSpotCheck(sheets) {
     await browser.close().catch(() => {});
   }
 
-  // Write to history tab
+  // Write to history
   await appendToHistory(sheets, historyRows);
 
-  // Format and send Telegram message
+  // Format Telegram message
   let msg = `📋 <b>Spot Check Results</b> — ${muTime()}\n${'─'.repeat(30)}\n`;
   for (const r of results) {
     const flag = MARKETPLACES[r.market]?.flag || '🌐';
@@ -490,21 +509,67 @@ async function runSpotCheck(sheets) {
     if (r.detail) msg += `  <i>${r.detail}</i>\n`;
   }
 
-  if (TELEGRAM_CHAT) {
-    await sendTelegram(TELEGRAM_CHAT, msg);
-    console.log(`📱 Results sent to Telegram chat ${TELEGRAM_CHAT}`);
-  } else {
-    console.log('No Telegram chat ID — results logged to console only');
-    console.log(msg);
-  }
+  await sendTelegram(msg, telegramChatId || TELEGRAM_CHAT);
+  console.log(`📱 Spot check results sent to Telegram`);
 }
 
-// ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
-async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime) {
+// ─── FORMAT TELEGRAM SUMMARY (full run) ───────────────────────────────────────
+function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
+  const duration     = Math.round((Date.now() - startTime) / 60000);
+  const reactivated  = summary.filter(r => r.reactivated);
+  const issues       = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated);
+
+  let msg = `📊 <b>Amazon Check Complete</b> — ${muTime()}\n`;
+  msg += `${'─'.repeat(30)}\n`;
+  msg += `✅ ${totalChecked} ASINs checked (${scope})\n`;
+  msg += `⏱ ${duration} minute(s)\n`;
+  if (totalBlocked > 0) msg += `⚠️ ${totalBlocked} blocked\n`;
+  if (totalErrors  > 0) msg += `❌ ${totalErrors} errors\n`;
+  msg += '\n';
+
+  // Reactivated listings — URGENT
+  if (reactivated.length > 0) {
+    msg += `🚨 <b>URGENT — ${reactivated.length} previously closed listing(s) are now LIVE:</b>\n`;
+    for (const r of reactivated) {
+      const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
+      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  <i>${r.notes}</i>\n`;
+    }
+    msg += '\n';
+  }
+
+  if (issues.length === 0 && reactivated.length === 0) {
+    msg += `✅ All active listings are LIVE — no issues!`;
+  } else if (issues.length > 0) {
+    msg += `⚠️ <b>${issues.length} issue(s) need attention:</b>\n`;
+    for (const r of issues) {
+      const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
+      msg += `\n${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  ${r.alert}${r.notes ? ' — ' + r.notes : ''}\n`;
+    }
+  }
+
+  return msg;
+}
+
+// ─── SEND EMAIL SUMMARY (full run) ────────────────────────────────────────────
+async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
 
-  const duration  = Math.round((Date.now() - startTime) / 60000);
-  const issues    = summary.filter(r => r.alert !== '✅ LIVE');
+  const duration    = Math.round((Date.now() - startTime) / 60000);
+  const reactivated = summary.filter(r => r.reactivated);
+  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated);
+
+  const reactivatedRows = reactivated.map(r =>
+    `<tr style="background:#fff3cd">
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.asin}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.sku}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">🟢 REACTIVATED</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.notes}</td>
+    </tr>`
+  ).join('');
+
   const issueRows = issues.map(r =>
     `<tr>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
@@ -515,28 +580,38 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     </tr>`
   ).join('');
 
+  const tableHeader = `<tr style="background:#f0f0f0">
+    <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
+    <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
+    <th style="padding:4px 8px;border:1px solid #ddd">SKU</th>
+    <th style="padding:4px 8px;border:1px solid #ddd">Status</th>
+    <th style="padding:4px 8px;border:1px solid #ddd">Notes</th>
+  </tr>`;
+
   const html = `
     <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — ${muTime()}</h2>
     <p style="font-family:Arial,sans-serif">
-      ✅ <strong>${totalChecked}</strong> ASINs checked<br>
+      ✅ <strong>${totalChecked}</strong> ASINs checked (${scope})<br>
       ⏱ Completed in <strong>${duration} minutes</strong><br>
       ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked<br>` : ''}
-      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>`   : ''}
+      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>` : ''}
     </p>
-    ${issues.length === 0
-      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All listings LIVE — no issues!</p>`
-      : `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s):</h3>
-         <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">
-           <tr style="background:#f0f0f0">
-             <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
-             <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
-             <th style="padding:4px 8px;border:1px solid #ddd">SKU</th>
-             <th style="padding:4px 8px;border:1px solid #ddd">Status</th>
-             <th style="padding:4px 8px;border:1px solid #ddd">Notes</th>
-           </tr>
-           ${issueRows}
-         </table>`
+
+    ${reactivated.length > 0 ? `
+      <h3 style="color:#856404;font-family:Arial,sans-serif">🚨 URGENT — Previously closed listing(s) now LIVE:</h3>
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">
+        ${tableHeader}${reactivatedRows}
+      </table><br>` : ''}
+
+    ${issues.length === 0 && reactivated.length === 0
+      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE — no issues!</p>`
+      : issues.length > 0
+        ? `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s):</h3>
+           <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">
+             ${tableHeader}${issueRows}
+           </table>` : ''
     }
+
     <p style="margin-top:24px;font-family:Arial,sans-serif">
       <a href="https://docs.google.com/spreadsheets/d/${SHEET_ID}"
          style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">
@@ -544,15 +619,15 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       </a>
     </p>`;
 
-  const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
-  await transporter.sendMail({
-    from:    `Amazon Checker <${GMAIL_USER}>`,
-    to:      GMAIL_USER,
-    subject: issues.length === 0
+  const hasUrgent = reactivated.length > 0;
+  const subject = hasUrgent
+    ? `🚨 URGENT — ${reactivated.length} closed listing(s) now LIVE (${muTime()})`
+    : issues.length === 0
       ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
-      : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`,
-    html,
-  });
+      : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`;
+
+  const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
+  await transporter.sendMail({ from: `Amazon Checker <${GMAIL_USER}>`, to: GMAIL_USER, subject, html });
   console.log(`   📧 Email sent`);
 }
 
@@ -568,7 +643,7 @@ async function main() {
 
   // ── SPOT CHECK MODE ────────────────────────────────────────────────────────
   if (RUN_MODE === 'spotcheck' && IDENTIFIERS_RAW) {
-    await runSpotCheck(sheets);
+    await runSpotCheck(sheets, TELEGRAM_CHAT);
     return;
   }
 
@@ -576,13 +651,17 @@ async function main() {
   await applyConditionalFormatting(sheets);
   await ensureHistoryTab(sheets);
 
-  const allTabs = await getTabNames(sheets);
+  const allTabs   = await getTabNames(sheets);
   const tabsToRun = allTabs.filter(t => {
     if (SKIP_SHEETS.includes(t)) return false;
     if (!MARKETPLACES[t]) return false;
     if (ONLY_TAB && t !== ONLY_TAB) return false;
     return true;
   });
+
+  const scope = ONLY_TAB
+    ? ONLY_TAB
+    : tabsToRun.length === Object.keys(MARKETPLACES).length ? 'all marketplaces' : tabsToRun.join(', ');
 
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
   const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
@@ -593,11 +672,9 @@ async function main() {
   console.log(`🔀 Running ${parallelTabs.length} tabs in parallel`);
   if (sequentialTabs.length > 0) console.log(`🔁 Sequential (shared IP): ${sequentialTabs.join(', ')}`);
 
-  const parallelResults = await Promise.all(parallelTabs.map(t => processTab(sheets, t, today, now)));
+  const parallelResults  = await Promise.all(parallelTabs.map(t => processTab(sheets, t, today, now)));
   const sequentialResults = [];
-  for (const t of sequentialTabs) {
-    sequentialResults.push(await processTab(sheets, t, today, now));
-  }
+  for (const t of sequentialTabs) sequentialResults.push(await processTab(sheets, t, today, now));
 
   const allResults   = [...parallelResults, ...sequentialResults];
   const summary      = allResults.flatMap(r => r.summary);
@@ -616,7 +693,14 @@ async function main() {
   if (totalErrors  > 0) console.log(`  ❌  ${totalErrors} errors`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime);
+  // Send Telegram summary
+  console.log('📱 Sending Telegram summary...');
+  const telegramMsg = formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
+  await sendTelegram(telegramMsg);
+
+  // Send email summary
+  console.log('📧 Sending email summary...');
+  await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
 }
 
 main().catch(err => {
