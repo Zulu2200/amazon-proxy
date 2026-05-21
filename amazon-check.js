@@ -435,19 +435,28 @@ async function processTab(sheets, tabName, today, now) {
     let notes       = '';
     let reactivated = false;
 
-    if (desktop.isBlocked) {
+    // Mobile is more reliable than desktop — if mobile finds buttons, listing is LIVE
+    const mobileFoundButtons = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
+    const desktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
+
+    if (desktop.isBlocked && !mobileFoundButtons) {
       alert = '⚠️ BLOCKED'; notes = 'Amazon blocked this check'; totalBlocked++;
-    } else if (desktop.atc === 'Error') {
+    } else if (desktop.atc === 'Error' && !mobileFoundButtons) {
       alert = '⚠️ ERROR'; notes = desktop.stock; totalErrors++;
-    } else if (desktop.isUnavailable) {
-      alert = '🔴 UNAVAILABLE'; notes = desktop.stock || 'Listing unavailable';
-    } else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
+    } else if (desktopFoundButtons || mobileFoundButtons) {
+      // Either desktop or mobile found buttons — listing is LIVE
       alert = '✅ LIVE';
+      // Add note if desktop disagreed with mobile
+      if (!desktopFoundButtons && mobileFoundButtons) {
+        notes = 'Mobile confirmed live (desktop detection issue)';
+      }
       if (suppressed) {
         reactivated = true;
         alert = '🟢 REACTIVATED';
         notes = `Was marked ${manualNote.toUpperCase()} but is now LIVE!`;
       }
+    } else if (desktop.isUnavailable) {
+      alert = '🔴 UNAVAILABLE'; notes = desktop.stock || 'Listing unavailable';
     } else {
       alert = '🔴 NO BUTTONS'; notes = desktop.stock || 'No ATC or Buy Now found';
     }
@@ -720,8 +729,14 @@ async function main() {
   console.log(`🔀 Running ${parallelTabs.length} tabs in parallel`);
   if (afterSaudiTabs.length > 0) console.log(`🔁 After Saudi Arabia: ${afterSaudiTabs.join(', ')}`);
 
-  // Run all parallel tabs (including Saudi Arabia) simultaneously
-  const parallelResults = await Promise.all(parallelTabs.map(t => processTab(sheets, t, today, now)));
+  // Run all parallel tabs (including Saudi Arabia) — staggered launches to avoid Chrome proxy conflicts
+  const parallelResults = await Promise.all(
+    parallelTabs.map(async (t, i) => {
+      // Stagger each marketplace by 3 seconds so each Chrome instance has time to bind its proxy properly
+      await sleep(i * 3000);
+      return processTab(sheets, t, today, now);
+    })
+  );
 
   // Run UAE after Saudi Arabia finishes
   const afterResults = [];
