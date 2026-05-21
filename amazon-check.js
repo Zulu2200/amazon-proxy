@@ -381,6 +381,52 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       };
     }).catch(() => ({ hasATC: false, hasBuy: false, hasPurchaseBox: false, stockText: '' }));
 
+    // Detailed desktop debug logs for Canada/Brazil only.
+    // This tells us what Amazon is actually showing to desktop Puppeteer.
+    const needsDesktopDebug =
+      !isMobile &&
+      (baseUrl.includes('amazon.ca') || baseUrl.includes('amazon.com.br')) &&
+      !pageState.hasATC &&
+      !pageState.hasBuy;
+
+    if (needsDesktopDebug) {
+      const desktopDebug = await page.evaluate(() => {
+        const getText = selector => {
+          const el = document.querySelector(selector);
+          return el ? el.innerText.replace(/\s+/g, ' ').trim().substring(0, 400) : '';
+        };
+
+        const bodyText = document.body
+          ? document.body.innerText.replace(/\s+/g, ' ').trim()
+          : '';
+
+        return {
+          title: document.title,
+          currentUrl: location.href,
+          deliveryLine1: getText('#glow-ingress-line1'),
+          deliveryLine2: getText('#glow-ingress-line2'),
+          availability: getText('#availability, #availability_feature_div'),
+          hasBuybox: !!document.querySelector('#buybox'),
+          hasDesktopBuybox: !!document.querySelector('#desktop_buybox'),
+          hasRightCol: !!document.querySelector('#rightCol'),
+          hasCenterCol: !!document.querySelector('#centerCol'),
+          hasPpd: !!document.querySelector('#ppd'),
+          hasNewAccordionRow: !!document.querySelector('#newAccordionRow'),
+          hasATCId: !!document.querySelector('#add-to-cart-button'),
+          hasBuyNowId: !!document.querySelector('#buy-now-button'),
+          hasATCInput: !!document.querySelector('input[name="submit.add-to-cart"]'),
+          hasBuyNowInput: !!document.querySelector('input[name="submit.buy-now"]'),
+          hasAllBuyingOptionsText: /see all buying options|ver todas as opções de compra|voir toutes les options d'achat/i.test(bodyText),
+          hasUnavailableText: /currently unavailable|not available|atualmente indisponível|indisponível|sem estoque/i.test(bodyText),
+          bodyStart: bodyText.substring(0, 900),
+        };
+      }).catch(e => ({ error: e.message }));
+
+      console.log('🧪 DESKTOP DEBUG START');
+      console.log(JSON.stringify(desktopDebug, null, 2));
+      console.log('🧪 DESKTOP DEBUG END');
+    }
+
     // Buttons win. This restores the old reliable mobile behavior, while still
     // allowing Canada desktop to detect alternate Amazon button inputs.
     if (pageState.hasATC || pageState.hasBuy) {
@@ -502,15 +548,25 @@ async function processTab(sheets, tabName, today, now) {
     const mobile  = await checkPageWithRetry(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
-    // If mobile sees the listing live but desktop missed it, retry desktop once
-    // for Canada/Brazil before writing Missing to the sheet.
+    // Canada/Brazil desktop rescue:
+    // If mobile proves the listing is live but desktop missed the buttons,
+    // restart Chrome and retry desktop once in a completely fresh browser.
     const earlyDesktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
     const earlyMobileFoundButtons  = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
+
     if (!earlyDesktopFoundButtons && earlyMobileFoundButtons && ['Canada', 'Brazil'].includes(tabName)) {
-      console.log(`      ↩ Desktop missed buttons but mobile found them — retrying desktop once`);
-      await sleep(8000);
+      console.log(`      🔁 Desktop missed buttons but mobile found them — restarting Chrome and retrying desktop once`);
+      console.log(`      🔎 Before rescue: desktop ATC=${desktop.atc} Buy=${desktop.buy} Stock=${desktop.stock} | mobile ATC=${mobile.atc} Buy=${mobile.buy} Stock=${mobile.stock}`);
+
+      browser = await launchMarketBrowser();
+      checksInThisBrowser = 0;
+
+      await sleep(10000);
+
       desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
       await sleep(randomDelay());
+
+      console.log(`      🔁 Desktop rescue result: ATC=${desktop.atc} Buy=${desktop.buy} Stock=${desktop.stock}`);
     }
 
     let alert       = '';
