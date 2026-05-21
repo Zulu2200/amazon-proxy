@@ -455,9 +455,19 @@ async function processTab(sheets, tabName, today, now) {
     const lToM = [desktop.stock, alert];
 
     try {
+      // Small random delay before writing to avoid parallel write conflicts
+      await sleep(Math.floor(Math.random() * 500) + 100);
       await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
+      // Retry once after a longer delay
+      try {
+        await sleep(2000);
+        await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
+        console.log(`   [${tabName}] ✅ Retry write succeeded for ${asin}`);
+      } catch (err2) {
+        console.log(`   [${tabName}] ❌ Retry also failed for ${asin}: ${err2.message}`);
+      }
     }
 
     historyRows.push([today, now, tabName, asin, sku, alert, notes]);
