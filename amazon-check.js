@@ -297,10 +297,31 @@ async function handleContinueShopping(page, url, label = '') {
       document.body ? document.body.innerText.replace(/\s+/g, ' ').trim() : ''
     ).catch(() => '');
 
+    const pageShape = await page.evaluate(() => ({
+      hasCoreProductArea: !!(
+        document.querySelector('#ppd') ||
+        document.querySelector('#centerCol') ||
+        document.querySelector('#rightCol') ||
+        document.querySelector('#buybox') ||
+        document.querySelector('#desktop_buybox') ||
+        document.querySelector('#add-to-cart-button') ||
+        document.querySelector('#buy-now-button') ||
+        document.querySelector('input[name="submit.add-to-cart"]') ||
+        document.querySelector('input[name="submit.buy-now"]')
+      )
+    })).catch(() => ({ hasCoreProductArea: false }));
+
+    const hasContinueShoppingText = /continue shopping/i.test(bodyText);
+
     const isContinueShoppingPage =
       /click the button below to continue shopping/i.test(bodyText) ||
       /^continue shopping$/i.test(bodyText) ||
-      /continue shopping conditions of use/i.test(bodyText);
+      /continue shopping conditions of use/i.test(bodyText) ||
+      (
+        hasContinueShoppingText &&
+        !pageShape.hasCoreProductArea &&
+        /interest-based ads notice|skip to main content|conditions of use/i.test(bodyText)
+      );
 
     if (!isContinueShoppingPage) return false;
 
@@ -580,7 +601,7 @@ async function processTab(sheets, tabName, today, now) {
 
   // Minimal restart logic: only for Canada/Brazil, where desktop can degrade
   // after several product pages. Other marketplaces stay unchanged.
-  const RESTART_MARKETS = ['Canada', 'Brazil'];
+  const RESTART_MARKETS = ['Brazil']; // Canada removed: restart was causing Amazon's desktop soft-block page
   const RESTART_EVERY = RESTART_MARKETS.includes(tabName) ? 8 : 9999;
   let browser = null;
   let checksInThisBrowser = 0;
