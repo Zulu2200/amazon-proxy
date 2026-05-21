@@ -378,8 +378,8 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 async function checkPageWithRetry(browser, url, isMobile, baseUrl, zipCode) {
   const result = await checkPage(browser, url, isMobile, baseUrl, zipCode);
 
-  // Retry once if blocked or error
-  if (result.isBlocked || result.atc === 'Error') {
+  // Retry once if blocked, error, OR unavailable
+  if (result.isBlocked || result.atc === 'Error' || result.isUnavailable) {
     console.log(`      ↩ Retrying in 10 seconds...`);
     await sleep(10000);
     return await checkPage(browser, url, isMobile, baseUrl, zipCode);
