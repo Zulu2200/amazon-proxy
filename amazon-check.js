@@ -3,7 +3,10 @@
 //  Two modes: full (updates sheet) and spotcheck (Telegram only)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const puppeteer  = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
+
 const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 
@@ -291,10 +294,6 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
   const page = await browser.newPage();
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      window.chrome = { runtime: {} };
-    });
 
     if (isMobile) {
       await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1');
@@ -326,6 +325,11 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
     }
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Mimic human behavior - random small mouse movements and waits
+    await page.mouse.move(Math.random() * 100, Math.random() * 100);
+    await sleep(Math.random() * 2000 + 1000); // 1-3 second human pause
+    
     await page.waitForSelector('#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page', { timeout: 8000 }).catch(() => {});
 
     const pageTitle   = await page.title().catch(() => '');
@@ -491,6 +495,7 @@ async function processTab(sheets, tabName, today, now) {
   console.log(`\n   ✅ [${tabName}] complete — ${asins.length} ASINs checked`);
   return { summary, historyRows, totalBlocked, totalErrors };
 }
+
 // ─── SPOT CHECK MODE ───────────────────────────────────────────────────────────
 async function runSpotCheck(sheets, telegramChatId) {
   const identifiers = IDENTIFIERS_RAW.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
