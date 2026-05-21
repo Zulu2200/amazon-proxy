@@ -286,6 +286,68 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
   });
 }
 
+
+// ─── HANDLE AMAZON "CONTINUE SHOPPING" SOFT BLOCK ─────────────────────────────
+// Amazon sometimes shows a soft interstitial on desktop:
+// "Click the button below to continue shopping". This is not a product page.
+// We click the Continue shopping button and wait before checking product buttons.
+async function handleContinueShopping(page, url, label = '') {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const bodyText = await page.evaluate(() =>
+      document.body ? document.body.innerText.replace(/\s+/g, ' ').trim() : ''
+    ).catch(() => '');
+
+    const isContinueShoppingPage =
+      /click the button below to continue shopping/i.test(bodyText) ||
+      /^continue shopping$/i.test(bodyText) ||
+      /continue shopping conditions of use/i.test(bodyText);
+
+    if (!isContinueShoppingPage) return false;
+
+    console.log(`      🟡 ${label} Amazon Continue Shopping page detected — clicking through (attempt ${attempt})`);
+
+    const clicked = await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"], a'));
+      const target = candidates.find(el => {
+        const text = ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim();
+        return /continue shopping/i.test(text);
+      });
+
+      if (target) {
+        target.click();
+        return true;
+      }
+
+      const form = document.querySelector('form');
+      if (form) {
+        form.submit();
+        return true;
+      }
+
+      return false;
+    }).catch(() => false);
+
+    if (clicked) {
+      await sleep(5000);
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+      await sleep(3000);
+    } else {
+      console.log(`      ⚠️ ${label} Continue Shopping page found but no clickable button/form was detected`);
+      return true;
+    }
+
+    // Some Amazon versions do not navigate cleanly after clicking.
+    // Reload the target product URL once after clicking through.
+    if (attempt === 1) {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await sleep(3000);
+    }
+  }
+
+  return true;
+}
+
+
 // ─── CHECK A SINGLE AMAZON PAGE ────────────────────────────────────────────────
 async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
   const page = await browser.newPage();
@@ -327,6 +389,12 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
+    // Canada/Brazil desktop sometimes gets Amazon's soft "Continue shopping" page.
+    // Click through it before trying to detect Add to Cart / Buy Now.
+    if (!isMobile && (baseUrl.includes('amazon.ca') || baseUrl.includes('amazon.com.br'))) {
+      await handleContinueShopping(page, url, baseUrl.includes('amazon.ca') ? 'Canada desktop' : 'Brazil desktop');
+    }
+
     // Keep normal marketplaces exactly like before.
     // Only Canada desktop gets a stronger wait because amazon.ca desktop buy box can load late.
     const isCanadaDesktop = baseUrl.includes('amazon.ca') && !isMobile;
@@ -344,8 +412,22 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 
     const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(() => document.body ? document.body.innerText.substring(0, 600) : '').catch(() => '');
-    const isBlocked   = /robot|captcha|verify|sorry|unusual traffic/i.test(pageTitle) || /enter the characters|type the characters|are you a human/i.test(bodySnippet);
-    if (isBlocked) return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
+    const isBlocked =
+      /robot|captcha|verify|sorry|unusual traffic/i.test(pageTitle) ||
+      /enter the characters|type the characters|are you a human/i.test(bodySnippet) ||
+      /click the button below to continue shopping/i.test(bodySnippet);
+
+    if (isBlocked) {
+      return {
+        atc: 'BLOCKED',
+        buy: 'BLOCKED',
+        stock: /click the button below to continue shopping/i.test(bodySnippet)
+          ? 'Amazon Continue Shopping soft block'
+          : 'CAPTCHA detected',
+        isBlocked: true,
+        isUnavailable: false
+      };
+    }
 
     const pageState = await page.evaluate(() => {
       const hasAny = selectors => selectors.some(selector => !!document.querySelector(selector));
