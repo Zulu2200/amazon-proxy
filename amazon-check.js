@@ -726,25 +726,13 @@ async function main() {
   const afterSaudiTabs = tabsToRun.filter(t => AFTER_SAUDI.includes(t));
   const parallelTabs   = tabsToRun.filter(t => !AFTER_SAUDI.includes(t));
 
-  console.log(`🔀 Running ${parallelTabs.length} tabs in parallel`);
-  if (afterSaudiTabs.length > 0) console.log(`🔁 After Saudi Arabia: ${afterSaudiTabs.join(', ')}`);
+  console.log(`🔁 Running ${parallelTabs.length + afterSaudiTabs.length} tabs sequentially (one at a time)`);
 
-  // Run all parallel tabs (including Saudi Arabia) — staggered launches to avoid Chrome proxy conflicts
-  const parallelResults = await Promise.all(
-    parallelTabs.map(async (t, i) => {
-      // Stagger each marketplace by 3 seconds so each Chrome instance has time to bind its proxy properly
-      await sleep(i * 3000);
-      return processTab(sheets, t, today, now);
-    })
-  );
-
-  // Run UAE after Saudi Arabia finishes
-  const afterResults = [];
-  for (const t of afterSaudiTabs) {
-    afterResults.push(await processTab(sheets, t, today, now));
+  // Run each tab sequentially — slower but more reliable (no Chrome proxy conflicts)
+  const allResults = [];
+  for (const t of [...parallelTabs, ...afterSaudiTabs]) {
+    allResults.push(await processTab(sheets, t, today, now));
   }
-
-  const allResults   = [...parallelResults, ...afterResults];
   const summary      = allResults.flatMap(r => r.summary);
   const historyRows  = allResults.flatMap(r => r.historyRows);
   const totalChecked = summary.length;
