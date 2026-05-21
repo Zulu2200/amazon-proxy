@@ -3,10 +3,7 @@
 //  Two modes: full (updates sheet) and spotcheck (Telegram only)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(StealthPlugin());
-
+const puppeteer  = require('puppeteer');
 const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 
@@ -294,6 +291,10 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
   const page = await browser.newPage();
   try {
     await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      window.chrome = { runtime: {} };
+    });
 
     if (isMobile) {
       await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1');
@@ -325,11 +326,6 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
     }
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    
-    // Mimic human behavior - random small mouse movements and waits
-    await page.mouse.move(Math.random() * 100, Math.random() * 100);
-    await sleep(Math.random() * 2000 + 1000); // 1-3 second human pause
-    
     await page.waitForSelector('#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page', { timeout: 8000 }).catch(() => {});
 
     const pageTitle   = await page.title().catch(() => '');
@@ -378,8 +374,8 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 async function checkPageWithRetry(browser, url, isMobile, baseUrl, zipCode) {
   const result = await checkPage(browser, url, isMobile, baseUrl, zipCode);
 
-  // Retry once if blocked, error, OR unavailable
-  if (result.isBlocked || result.atc === 'Error' || result.isUnavailable) {
+  // Retry once if blocked or error
+  if (result.isBlocked || result.atc === 'Error') {
     console.log(`      ↩ Retrying in 10 seconds...`);
     await sleep(10000);
     return await checkPage(browser, url, isMobile, baseUrl, zipCode);
@@ -404,8 +400,11 @@ async function processTab(sheets, tabName, today, now) {
   console.log(`   [${tabName}] ${asins.length} ASINs to check`);
 
   const [proxyHost, proxyPort] = marketplace.proxy.split(':');
+  // Unique user data dir per marketplace to isolate parallel browsers
+  const userDataDir = `/tmp/chrome-${tabName.replace(/\s+/g, '-')}-${Date.now()}`;
   const browser = await puppeteer.launch({
     headless: 'new',
+    userDataDir,
     args: [
       `--proxy-server=http://${proxyHost}:${proxyPort}`,
       '--no-sandbox', '--disable-setuid-sandbox',
@@ -425,16 +424,11 @@ async function processTab(sheets, tabName, today, now) {
     const checkedAt = muTime();
     const suppressed = isSuppressed(manualNote);
 
-    console.log(`\n   [${tabName}] Checking ${asin}${suppressed ? ' [' + manualNote.toUpperCase() + ']' : ''}`);
+    process.stdout.write(`   [${tabName}] ${asin}${suppressed ? ' [' + manualNote.toUpperCase() + ']' : ''}  `);
 
     const desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
-    console.log(`      ├─ DESKTOP: ATC=${desktop.atc}, Buy=${desktop.buy}, Unav=${desktop.isUnavailable}, Blocked=${desktop.isBlocked}`);
-    console.log(`      │  Stock text: "${desktop.stock}"`);
     await sleep(randomDelay());
-    
     const mobile  = await checkPageWithRetry(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
-    console.log(`      ├─ MOBILE: ATC=${mobile.atc}, Buy=${mobile.buy}, Unav=${mobile.isUnavailable}, Blocked=${mobile.isBlocked}`);
-    console.log(`      │  Stock text: "${mobile.stock}"`);
     await sleep(randomDelay());
 
     let alert       = '';
@@ -458,18 +452,15 @@ async function processTab(sheets, tabName, today, now) {
       alert = '🔴 NO BUTTONS'; notes = desktop.stock || 'No ATC or Buy Now found';
     }
 
-    console.log(`      └─ FINAL: ${alert}${notes ? ' — ' + notes : ''}`);
+    console.log(`D: ATC=${desktop.atc} Buy=${desktop.buy} | M: ATC=${mobile.atc} Buy=${mobile.buy} | ${alert}`);
 
     const dToJ = [desktop.atc, desktop.buy, mobile.atc, mobile.buy, notes, checkedAt, url];
     const lToM = [desktop.stock, alert];
-
-    console.log(`      └─ WRITING ROW ${sheetRow}: D=${dToJ[0]}, E=${dToJ[1]}, F=${dToJ[2]}, G=${dToJ[3]}, M=${lToM[1]}`);
 
     try {
       // Small random delay before writing to avoid parallel write conflicts
       await sleep(Math.floor(Math.random() * 500) + 100);
       await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
-      console.log(`      ✓ Write successful for ${asin}`);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
       // Retry once after a longer delay
@@ -492,7 +483,7 @@ async function processTab(sheets, tabName, today, now) {
   }
 
   await browser.close().catch(() => {});
-  console.log(`\n   ✅ [${tabName}] complete — ${asins.length} ASINs checked`);
+  console.log(`   ✅ [${tabName}] complete`);
   return { summary, historyRows, totalBlocked, totalErrors };
 }
 
