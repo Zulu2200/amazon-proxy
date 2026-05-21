@@ -60,7 +60,7 @@ const MARKETPLACES = {
   'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301'   },
   'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1' },
   'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
-  'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867' },
+ 'Ireland': { baseUrl: 'https://www.amazon.ie', flag: '🇮🇪', proxy: '212.212.18.216:6867' },
   'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
   'France':       { baseUrl: 'https://www.amazon.fr',     flag: '🇫🇷', proxy: '31.98.4.142:7820'    },
   'Belgium':      { baseUrl: 'https://www.amazon.com.be', flag: '🇧🇪', proxy: '46.203.144.45:7812', zipCode: '1000'    },
