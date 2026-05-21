@@ -421,11 +421,16 @@ async function processTab(sheets, tabName, today, now) {
     const checkedAt = muTime();
     const suppressed = isSuppressed(manualNote);
 
-    process.stdout.write(`   [${tabName}] ${asin}${suppressed ? ' [' + manualNote.toUpperCase() + ']' : ''}  `);
+    console.log(`\n   [${tabName}] Checking ${asin}${suppressed ? ' [' + manualNote.toUpperCase() + ']' : ''}`);
 
     const desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
+    console.log(`      ├─ DESKTOP: ATC=${desktop.atc}, Buy=${desktop.buy}, Unav=${desktop.isUnavailable}, Blocked=${desktop.isBlocked}`);
+    console.log(`      │  Stock text: "${desktop.stock}"`);
     await sleep(randomDelay());
+    
     const mobile  = await checkPageWithRetry(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
+    console.log(`      ├─ MOBILE: ATC=${mobile.atc}, Buy=${mobile.buy}, Unav=${mobile.isUnavailable}, Blocked=${mobile.isBlocked}`);
+    console.log(`      │  Stock text: "${mobile.stock}"`);
     await sleep(randomDelay());
 
     let alert       = '';
@@ -449,15 +454,18 @@ async function processTab(sheets, tabName, today, now) {
       alert = '🔴 NO BUTTONS'; notes = desktop.stock || 'No ATC or Buy Now found';
     }
 
-    console.log(`D: ATC=${desktop.atc} Buy=${desktop.buy} | M: ATC=${mobile.atc} Buy=${mobile.buy} | ${alert}`);
+    console.log(`      └─ FINAL: ${alert}${notes ? ' — ' + notes : ''}`);
 
     const dToJ = [desktop.atc, desktop.buy, mobile.atc, mobile.buy, notes, checkedAt, url];
     const lToM = [desktop.stock, alert];
+
+    console.log(`      └─ WRITING ROW ${sheetRow}: D=${dToJ[0]}, E=${dToJ[1]}, F=${dToJ[2]}, G=${dToJ[3]}, M=${lToM[1]}`);
 
     try {
       // Small random delay before writing to avoid parallel write conflicts
       await sleep(Math.floor(Math.random() * 500) + 100);
       await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
+      console.log(`      ✓ Write successful for ${asin}`);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
       // Retry once after a longer delay
@@ -480,10 +488,9 @@ async function processTab(sheets, tabName, today, now) {
   }
 
   await browser.close().catch(() => {});
-  console.log(`   ✅ [${tabName}] complete`);
+  console.log(`\n   ✅ [${tabName}] complete — ${asins.length} ASINs checked`);
   return { summary, historyRows, totalBlocked, totalErrors };
 }
-
 // ─── SPOT CHECK MODE ───────────────────────────────────────────────────────────
 async function runSpotCheck(sheets, telegramChatId) {
   const identifiers = IDENTIFIERS_RAW.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
