@@ -57,8 +57,10 @@ const UNAVAILABLE_PHRASES = [
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
-  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301'   },
-  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V0A1'  },
+  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301',   zipCode: '10001' },
+'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1' },
+'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763', zipCode: '01310-100' },
+'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761',   zipCode: '06600' },
   'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
   'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867' },
   'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
@@ -69,7 +71,6 @@ const MARKETPLACES = {
   'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089'   },
   'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749'   },
   'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855'   },
-  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763'  },
   'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761'   },
   'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     flag: '🇸🇦', proxy: '82.29.239.167:5315'  },
   'UAE':          { baseUrl: 'https://www.amazon.ae',     flag: '🇦🇪', proxy: '82.29.239.167:5315'  },
