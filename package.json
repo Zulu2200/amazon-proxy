@@ -1,16 +1,16 @@
 {
-  "name": "amazon-proxy",
-  "version": "3.0.0",
-  "description": "Amazon listing checker — Puppeteer + Google Sheets + Email",
+  "name": "amazon-checker",
+  "version": "1.0.0",
+  "description": "Amazon listing checker with Google Sheets",
   "main": "amazon-check.js",
   "scripts": {
-    "check": "node amazon-check.js"
+    "start": "node amazon-check.js"
   },
   "dependencies": {
-    "googleapis": "^144.0.0",
-    "https-proxy-agent": "^7.0.5",
-    "node-fetch": "^2.7.0",
-    "nodemailer": "^6.9.13",
-    "puppeteer": "^22.0.0"
+    "puppeteer": "^22.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "googleapis": "^118.0.0",
+    "nodemailer": "^6.9.3"
   }
 }
