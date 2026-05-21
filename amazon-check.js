@@ -57,10 +57,8 @@ const UNAVAILABLE_PHRASES = [
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
-  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301',   zipCode: '10001' },
-'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1' },
-'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763', zipCode: '01310-100' },
-'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761',   zipCode: '06600' },
+  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301',   zipCode: '10001'    },
+  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1'  },
   'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
   'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867' },
   'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
@@ -71,7 +69,8 @@ const MARKETPLACES = {
   'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089'   },
   'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749'   },
   'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855'   },
-  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761'   },
+  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763',  zipCode: '01310-100' },
+  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761',   zipCode: '06600'    },
   'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     flag: '🇸🇦', proxy: '82.29.239.167:5315'  },
   'UAE':          { baseUrl: 'https://www.amazon.ae',     flag: '🇦🇪', proxy: '82.29.239.167:5315'  },
 };
@@ -327,41 +326,107 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
     }
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForSelector('#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page', { timeout: 8000 }).catch(() => {});
+
+    // Amazon Canada desktop sometimes loads the buy box late.
+    // Keep the longer wait Canada-desktop only so the other marketplaces stay fast.
+    const isCanadaDesktop = baseUrl.includes('amazon.ca') && !isMobile;
+
+    await page.waitForSelector(
+      '#add-to-cart-button, #buy-now-button, input[name="submit.add-to-cart"], input[name="submit.buy-now"], #availability, #availability_feature_div, #captchacharacters',
+      { timeout: isCanadaDesktop ? 18000 : 8000 }
+    ).catch(() => {});
+
+    if (isCanadaDesktop) {
+      await sleep(5000);
+      await page.evaluate(() => window.scrollBy(0, 350)).catch(() => {});
+      await sleep(2000);
+    }
 
     const pageTitle   = await page.title().catch(() => '');
     const bodySnippet = await page.evaluate(() => document.body ? document.body.innerText.substring(0, 600) : '').catch(() => '');
     const isBlocked   = /robot|captcha|verify|sorry|unusual traffic/i.test(pageTitle) || /enter the characters|type the characters|are you a human/i.test(bodySnippet);
     if (isBlocked) return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
 
-    const availText = await page.evaluate(() => {
-      const el = document.querySelector('#availability, #availability_feature_div');
-      return el ? el.innerText.toLowerCase().trim() : '';
-    }).catch(() => '');
+    const pageState = await page.evaluate(() => {
+      const visible = el => !!(
+        el &&
+        (el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+      );
 
-    const hasPurchaseBox = await page.evaluate(() => !!(
-      document.querySelector('#buybox') || document.querySelector('#desktop_buybox') ||
-      document.querySelector('#newAccordionRow') || document.querySelector('#add-to-cart-button') ||
-      document.querySelector('#buy-now-button')
-    )).catch(() => false);
+      const findVisible = selectors => selectors.some(selector =>
+        Array.from(document.querySelectorAll(selector)).some(visible)
+      );
 
-    const isUnavailable = UNAVAILABLE_PHRASES.some(p => availText.includes(p)) || !hasPurchaseBox;
-    if (isUnavailable) {
-      return { atc: 'Missing ❌', buy: 'Missing ❌', stock: availText.substring(0, 60) || 'Unavailable', isBlocked: false, isUnavailable: true };
+      const atcSelectors = [
+        '#add-to-cart-button',
+        'input[name="submit.add-to-cart"]',
+        '#submit\\.add-to-cart input'
+      ];
+
+      const buySelectors = [
+        '#buy-now-button',
+        'input[name="submit.buy-now"]',
+        '#submit\\.buy-now input'
+      ];
+
+      const purchaseBoxSelectors = [
+        '#buybox',
+        '#desktop_buybox',
+        '#newAccordionRow',
+        '#ppd',
+        '#centerCol',
+        '#rightCol'
+      ];
+
+      const availabilityEl = document.querySelector('#availability, #availability_feature_div');
+      const stockText = availabilityEl
+        ? availabilityEl.innerText.replace(/\s+/g, ' ').trim()
+        : '';
+
+      return {
+        hasATC: findVisible(atcSelectors),
+        hasBuy: findVisible(buySelectors),
+        hasPurchaseBox: findVisible(purchaseBoxSelectors),
+        stockText
+      };
+    }).catch(() => ({
+      hasATC: false,
+      hasBuy: false,
+      hasPurchaseBox: false,
+      stockText: ''
+    }));
+
+    // Buttons win. If the desktop page has real buttons, never mark it unavailable.
+    if (pageState.hasATC || pageState.hasBuy) {
+      return {
+        atc: pageState.hasATC ? 'Found ✅' : 'Missing ❌',
+        buy: pageState.hasBuy ? 'Found ✅' : 'Missing ❌',
+        stock: pageState.stockText.substring(0, 60) || 'In Stock',
+        isBlocked: false,
+        isUnavailable: false,
+      };
     }
 
-    const hasATC    = await page.evaluate(() => !!document.querySelector('#add-to-cart-button')).catch(() => false);
-    const hasBuy    = await page.evaluate(() => !!document.querySelector('#buy-now-button')).catch(() => false);
-    const stockText = await page.evaluate(() => {
-      const el = document.querySelector('#availability, #availability_feature_div');
-      return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
-    }).catch(() => '');
+    const availText = pageState.stockText.toLowerCase();
+    const isUnavailable =
+      UNAVAILABLE_PHRASES.some(p => availText.includes(p)) ||
+      !pageState.hasPurchaseBox;
+
+    if (isUnavailable) {
+      return {
+        atc: 'Missing ❌',
+        buy: 'Missing ❌',
+        stock: pageState.stockText.substring(0, 60) || 'Unavailable',
+        isBlocked: false,
+        isUnavailable: true
+      };
+    }
 
     return {
-      atc:           hasATC ? 'Found ✅' : 'Missing ❌',
-      buy:           hasBuy ? 'Found ✅' : 'Missing ❌',
-      stock:         stockText.substring(0, 60),
-      isBlocked:     false,
+      atc: 'Missing ❌',
+      buy: 'Missing ❌',
+      stock: pageState.stockText.substring(0, 60) || 'No desktop buttons found',
+      isBlocked: false,
       isUnavailable: false,
     };
   } catch (err) {
@@ -401,19 +466,35 @@ async function processTab(sheets, tabName, today, now) {
   console.log(`   [${tabName}] ${asins.length} ASINs to check`);
 
   const [proxyHost, proxyPort] = marketplace.proxy.split(':');
-  // Unique user data dir per marketplace to isolate parallel browsers
-  const userDataDir = `/tmp/chrome-${tabName.replace(/\s+/g, '-')}-${Date.now()}`;
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    userDataDir,
-    args: [
-      `--proxy-server=http://${proxyHost}:${proxyPort}`,
-      '--no-sandbox', '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage', '--disable-gpu',
-      '--disable-blink-features=AutomationControlled',
-      '--window-size=1366,768',
-    ],
-  });
+
+  // Americas desktop can degrade after many product pages in the same browser session.
+  // Restart only these marketplaces every few ASINs to keep desktop checks fresh.
+  const AMERICAS = ['USA', 'Canada', 'Brazil', 'Mexico'];
+  const RESTART_EVERY = AMERICAS.includes(tabName) ? 8 : 9999;
+  let browser = null;
+  let checksInThisBrowser = 0;
+
+  async function launchMarketBrowser() {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+
+    const freshUserDataDir = `/tmp/chrome-${tabName.replace(/\s+/g, '-')}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    return await puppeteer.launch({
+      headless: 'new',
+      userDataDir: freshUserDataDir,
+      args: [
+        `--proxy-server=http://${proxyHost}:${proxyPort}`,
+        '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1366,768',
+      ],
+    });
+  }
+
+  browser = await launchMarketBrowser();
 
   const summary     = [];
   const historyRows = [];
@@ -421,6 +502,13 @@ async function processTab(sheets, tabName, today, now) {
   let totalErrors   = 0;
 
   for (const { asin, sku, manualNote, sheetRow } of asins) {
+    if (checksInThisBrowser >= RESTART_EVERY) {
+      console.log(`   [${tabName}] 🔄 Restarting browser after ${checksInThisBrowser} ASINs`);
+      browser = await launchMarketBrowser();
+      checksInThisBrowser = 0;
+      await sleep(5000);
+    }
+
     const url       = `${marketplace.baseUrl}/dp/${asin}`;
     const checkedAt = muTime();
     const suppressed = isSuppressed(manualNote);
@@ -490,6 +578,8 @@ async function processTab(sheets, tabName, today, now) {
       suppress:    suppressed && !reactivated,
       reactivated,
     });
+
+    checksInThisBrowser++;
   }
 
   await browser.close().catch(() => {});
@@ -547,15 +637,33 @@ async function runSpotCheck(sheets, telegramChatId) {
       const url     = `${config.baseUrl}/dp/${asin}`;
       const desktop = await checkPageWithRetry(browser, url, false, config.baseUrl, config.zipCode);
       await sleep(randomDelay());
+      const mobile  = await checkPageWithRetry(browser, url, true,  config.baseUrl, config.zipCode);
+      await sleep(randomDelay());
+
+      const desktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
+      const mobileFoundButtons  = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
 
       let status = '';
       let detail = '';
 
-      if (desktop.isBlocked)           { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
-      else if (desktop.atc === 'Error') { status = '⚠️ ERROR';       detail = desktop.stock; }
-      else if (desktop.isUnavailable)   { status = '🔴 UNAVAILABLE'; detail = desktop.stock || 'Unavailable'; }
-      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { status = '✅ LIVE'; detail = desktop.stock; }
-      else                              { status = '🔴 NO BUTTONS';  detail = desktop.stock || 'No buttons found'; }
+      if (desktopFoundButtons || mobileFoundButtons) {
+        status = '✅ LIVE';
+        detail = !desktopFoundButtons && mobileFoundButtons
+          ? 'Mobile confirmed live (desktop detection issue)'
+          : (desktop.stock || mobile.stock || 'Buttons found');
+      } else if (desktop.isBlocked && mobile.isBlocked) {
+        status = '⚠️ BLOCKED';
+        detail = 'CAPTCHA detected';
+      } else if (desktop.atc === 'Error' && mobile.atc === 'Error') {
+        status = '⚠️ ERROR';
+        detail = desktop.stock || mobile.stock;
+      } else if (desktop.isUnavailable || mobile.isUnavailable) {
+        status = '🔴 UNAVAILABLE';
+        detail = desktop.stock || mobile.stock || 'Unavailable';
+      } else {
+        status = '🔴 NO BUTTONS';
+        detail = desktop.stock || mobile.stock || 'No buttons found';
+      }
 
       results.push({ market, identifier, asin, sku, status, detail });
       historyRows.push([today, now, market, asin, sku, status, (detail || '') + ' (spot check)']);
