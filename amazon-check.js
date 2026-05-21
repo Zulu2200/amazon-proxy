@@ -57,8 +57,8 @@ const UNAVAILABLE_PHRASES = [
 
 // ─── MARKETPLACE CONFIG ────────────────────────────────────────────────────────
 const MARKETPLACES = {
-  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301',   zipCode: '10001'    },
-  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1'  },
+  'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301'   },
+  'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1' },
   'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
   'Ireland':      { baseUrl: 'https://www.amazon.co.uk',  flag: '🇮🇪', proxy: '212.212.18.216:6867' },
   'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
@@ -69,8 +69,8 @@ const MARKETPLACES = {
   'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089'   },
   'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749'   },
   'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855'   },
-  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763',  zipCode: '01310-100' },
-  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761',   zipCode: '06600'    },
+  'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763'  },
+  'Mexico':       { baseUrl: 'https://www.amazon.com.mx', flag: '🇲🇽', proxy: '9.142.194.93:6761'   },
   'Saudi Arabia': { baseUrl: 'https://www.amazon.sa',     flag: '🇸🇦', proxy: '82.29.239.167:5315'  },
   'UAE':          { baseUrl: 'https://www.amazon.ae',     flag: '🇦🇪', proxy: '82.29.239.167:5315'  },
 };
@@ -327,14 +327,14 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Amazon Canada desktop sometimes loads the buy box late.
-    // Keep the longer wait Canada-desktop only so the other marketplaces stay fast.
+    // Keep normal marketplaces exactly like before.
+    // Only Canada desktop gets a stronger wait because amazon.ca desktop buy box can load late.
     const isCanadaDesktop = baseUrl.includes('amazon.ca') && !isMobile;
+    const waitSelector = isCanadaDesktop
+      ? '#add-to-cart-button, #buy-now-button, input[name="submit.add-to-cart"], input[name="submit.buy-now"], #availability, #availability_feature_div, #captchacharacters'
+      : '#add-to-cart-button, #buy-now-button, #availability, #captchacharacters, .a-page';
 
-    await page.waitForSelector(
-      '#add-to-cart-button, #buy-now-button, input[name="submit.add-to-cart"], input[name="submit.buy-now"], #availability, #availability_feature_div, #captchacharacters',
-      { timeout: isCanadaDesktop ? 18000 : 8000 }
-    ).catch(() => {});
+    await page.waitForSelector(waitSelector, { timeout: isCanadaDesktop ? 18000 : 8000 }).catch(() => {});
 
     if (isCanadaDesktop) {
       await sleep(5000);
@@ -348,85 +348,68 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
     if (isBlocked) return { atc: 'BLOCKED', buy: 'BLOCKED', stock: 'CAPTCHA detected', isBlocked: true, isUnavailable: false };
 
     const pageState = await page.evaluate(() => {
-      const visible = el => !!(
-        el &&
-        (el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-      );
-
-      const findVisible = selectors => selectors.some(selector =>
-        Array.from(document.querySelectorAll(selector)).some(visible)
-      );
+      const hasAny = selectors => selectors.some(selector => !!document.querySelector(selector));
 
       const atcSelectors = [
         '#add-to-cart-button',
         'input[name="submit.add-to-cart"]',
-        '#submit\\.add-to-cart input'
       ];
 
       const buySelectors = [
         '#buy-now-button',
         'input[name="submit.buy-now"]',
-        '#submit\\.buy-now input'
       ];
 
       const purchaseBoxSelectors = [
         '#buybox',
         '#desktop_buybox',
         '#newAccordionRow',
-        '#ppd',
-        '#centerCol',
-        '#rightCol'
+        '#add-to-cart-button',
+        '#buy-now-button',
+        'input[name="submit.add-to-cart"]',
+        'input[name="submit.buy-now"]',
       ];
 
-      const availabilityEl = document.querySelector('#availability, #availability_feature_div');
-      const stockText = availabilityEl
-        ? availabilityEl.innerText.replace(/\s+/g, ' ').trim()
-        : '';
+      const el = document.querySelector('#availability, #availability_feature_div');
+      const stockText = el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
 
       return {
-        hasATC: findVisible(atcSelectors),
-        hasBuy: findVisible(buySelectors),
-        hasPurchaseBox: findVisible(purchaseBoxSelectors),
-        stockText
+        hasATC: hasAny(atcSelectors),
+        hasBuy: hasAny(buySelectors),
+        hasPurchaseBox: hasAny(purchaseBoxSelectors),
+        stockText,
       };
-    }).catch(() => ({
-      hasATC: false,
-      hasBuy: false,
-      hasPurchaseBox: false,
-      stockText: ''
-    }));
+    }).catch(() => ({ hasATC: false, hasBuy: false, hasPurchaseBox: false, stockText: '' }));
 
-    // Buttons win. If the desktop page has real buttons, never mark it unavailable.
+    // Buttons win. This restores the old reliable mobile behavior, while still
+    // allowing Canada desktop to detect alternate Amazon button inputs.
     if (pageState.hasATC || pageState.hasBuy) {
       return {
-        atc: pageState.hasATC ? 'Found ✅' : 'Missing ❌',
-        buy: pageState.hasBuy ? 'Found ✅' : 'Missing ❌',
-        stock: pageState.stockText.substring(0, 60) || 'In Stock',
-        isBlocked: false,
+        atc:           pageState.hasATC ? 'Found ✅' : 'Missing ❌',
+        buy:           pageState.hasBuy ? 'Found ✅' : 'Missing ❌',
+        stock:         pageState.stockText.substring(0, 60) || 'In Stock',
+        isBlocked:     false,
         isUnavailable: false,
       };
     }
 
     const availText = pageState.stockText.toLowerCase();
-    const isUnavailable =
-      UNAVAILABLE_PHRASES.some(p => availText.includes(p)) ||
-      !pageState.hasPurchaseBox;
-
+    const isUnavailable = UNAVAILABLE_PHRASES.some(p => availText.includes(p)) || !pageState.hasPurchaseBox;
     if (isUnavailable) {
       return {
         atc: 'Missing ❌',
         buy: 'Missing ❌',
         stock: pageState.stockText.substring(0, 60) || 'Unavailable',
         isBlocked: false,
-        isUnavailable: true
+        isUnavailable: true,
       };
     }
 
     return {
-      atc: 'Missing ❌',
-      buy: 'Missing ❌',
-      stock: pageState.stockText.substring(0, 60) || 'No desktop buttons found',
-      isBlocked: false,
+      atc:           'Missing ❌',
+      buy:           'Missing ❌',
+      stock:         pageState.stockText.substring(0, 60) || 'No buttons found',
+      isBlocked:     false,
       isUnavailable: false,
     };
   } catch (err) {
@@ -467,10 +450,10 @@ async function processTab(sheets, tabName, today, now) {
 
   const [proxyHost, proxyPort] = marketplace.proxy.split(':');
 
-  // Americas desktop can degrade after many product pages in the same browser session.
-  // Restart only these marketplaces every few ASINs to keep desktop checks fresh.
-  const AMERICAS = ['USA', 'Canada', 'Brazil', 'Mexico'];
-  const RESTART_EVERY = AMERICAS.includes(tabName) ? 8 : 9999;
+  // Minimal restart logic: only for Canada/Brazil, where desktop can degrade
+  // after several product pages. Other marketplaces stay unchanged.
+  const RESTART_MARKETS = ['Canada', 'Brazil'];
+  const RESTART_EVERY = RESTART_MARKETS.includes(tabName) ? 8 : 9999;
   let browser = null;
   let checksInThisBrowser = 0;
 
@@ -479,11 +462,10 @@ async function processTab(sheets, tabName, today, now) {
       await browser.close().catch(() => {});
     }
 
-    const freshUserDataDir = `/tmp/chrome-${tabName.replace(/\s+/g, '-')}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
+    const userDataDir = `/tmp/chrome-${tabName.replace(/\s+/g, '-')}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return await puppeteer.launch({
       headless: 'new',
-      userDataDir: freshUserDataDir,
+      userDataDir,
       args: [
         `--proxy-server=http://${proxyHost}:${proxyPort}`,
         '--no-sandbox', '--disable-setuid-sandbox',
@@ -515,10 +497,21 @@ async function processTab(sheets, tabName, today, now) {
 
     process.stdout.write(`   [${tabName}] ${asin}${suppressed ? ' [' + manualNote.toUpperCase() + ']' : ''}  `);
 
-    const desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
+    let desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
     const mobile  = await checkPageWithRetry(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
+
+    // If mobile sees the listing live but desktop missed it, retry desktop once
+    // for Canada/Brazil before writing Missing to the sheet.
+    const earlyDesktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
+    const earlyMobileFoundButtons  = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
+    if (!earlyDesktopFoundButtons && earlyMobileFoundButtons && ['Canada', 'Brazil'].includes(tabName)) {
+      console.log(`      ↩ Desktop missed buttons but mobile found them — retrying desktop once`);
+      await sleep(8000);
+      desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
+      await sleep(randomDelay());
+    }
 
     let alert       = '';
     let notes       = '';
@@ -637,33 +630,15 @@ async function runSpotCheck(sheets, telegramChatId) {
       const url     = `${config.baseUrl}/dp/${asin}`;
       const desktop = await checkPageWithRetry(browser, url, false, config.baseUrl, config.zipCode);
       await sleep(randomDelay());
-      const mobile  = await checkPageWithRetry(browser, url, true,  config.baseUrl, config.zipCode);
-      await sleep(randomDelay());
-
-      const desktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
-      const mobileFoundButtons  = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
 
       let status = '';
       let detail = '';
 
-      if (desktopFoundButtons || mobileFoundButtons) {
-        status = '✅ LIVE';
-        detail = !desktopFoundButtons && mobileFoundButtons
-          ? 'Mobile confirmed live (desktop detection issue)'
-          : (desktop.stock || mobile.stock || 'Buttons found');
-      } else if (desktop.isBlocked && mobile.isBlocked) {
-        status = '⚠️ BLOCKED';
-        detail = 'CAPTCHA detected';
-      } else if (desktop.atc === 'Error' && mobile.atc === 'Error') {
-        status = '⚠️ ERROR';
-        detail = desktop.stock || mobile.stock;
-      } else if (desktop.isUnavailable || mobile.isUnavailable) {
-        status = '🔴 UNAVAILABLE';
-        detail = desktop.stock || mobile.stock || 'Unavailable';
-      } else {
-        status = '🔴 NO BUTTONS';
-        detail = desktop.stock || mobile.stock || 'No buttons found';
-      }
+      if (desktop.isBlocked)           { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
+      else if (desktop.atc === 'Error') { status = '⚠️ ERROR';       detail = desktop.stock; }
+      else if (desktop.isUnavailable)   { status = '🔴 UNAVAILABLE'; detail = desktop.stock || 'Unavailable'; }
+      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { status = '✅ LIVE'; detail = desktop.stock; }
+      else                              { status = '🔴 NO BUTTONS';  detail = desktop.stock || 'No buttons found'; }
 
       results.push({ market, identifier, asin, sku, status, detail });
       historyRows.push([today, now, market, asin, sku, status, (detail || '') + ' (spot check)']);
