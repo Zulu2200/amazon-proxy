@@ -200,6 +200,28 @@ async function applyConditionalFormatting(sheets) {
       addRequests.push(rule([buyBoxOwnerRange], 'NEW MIUZ',         COLOR.green));
       addRequests.push(rule([buyBoxOwnerRange], 'Hijacked',         COLOR.red));
       addRequests.push(rule([buyBoxOwnerRange], 'Unknown',          COLOR.amber));
+
+      // ── Suppressed hijack highlight (HIGHEST PRIORITY — added last so index 0) ──
+      // If column K (manual note) is CLOSED/OOS/NOT LISTED AND column M contains HIJACKED
+      // → colour D/E/F/G light red 2. Custom formula rule beats simple TEXT_CONTAINS rules.
+      addRequests.push({
+        addConditionalFormatRule: {
+          rule: {
+            ranges: [buttonRange],
+            booleanRule: {
+              condition: {
+                type: 'CUSTOM_FORMULA',
+                values: [{
+                  userEnteredValue:
+                    '=AND(REGEXMATCH(LOWER($K2),"^(closed|oos|not listed)$"),ISNUMBER(SEARCH("HIJACKED",$M2)),ISNUMBER(SEARCH("Found",$D2)))',
+                }],
+              },
+              format: { backgroundColor: { red: 0.957, green: 0.800, blue: 0.800 } },
+            },
+          },
+          index: 0,
+        },
+      });
     }
 
     // Apply formatting to History tab
@@ -404,9 +426,8 @@ async function getAllASINsFromSheet(sheets, tabNames) {
 }
 
 // ─── WRITE ONE ROW (INCLUDES COLUMN N FOR BUY BOX OWNER) ──────────────────────
-// highlightButtons: if true, colours D/E/F/G light red (suppressed hijack)
 //                  if false, clears colour on D/E/F/G back to white
-async function writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner, highlightButtons = false) {
+async function writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner) {
   // 1. Write values
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -419,52 +440,10 @@ async function writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBo
     },
   });
 
-  // 2. Set background colour on D/E/F/G (columns 3-6, 0-indexed)
-  //    When highlightButtons=true:  apply light red 2 (#F4CCCC) directly
-  //    When highlightButtons=false: clear direct format so conditional formatting
-  //                                 (green for Found ✅) takes back over
-  if (highlightButtons) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{
-          repeatCell: {
-            range: {
-              sheetId,
-              startRowIndex:    sheetRow - 1,
-              endRowIndex:      sheetRow,
-              startColumnIndex: 3,
-              endColumnIndex:   7,
-            },
-            cell: {
-              userEnteredFormat: { backgroundColor: { red: 0.957, green: 0.800, blue: 0.800 } },
-            },
-            fields: 'userEnteredFormat.backgroundColor',
-          },
-        }],
-      },
-    });
-  } else {
-    // Clear direct background so conditional formatting (green for Found ✅) shows through
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{
-          repeatCell: {
-            range: {
-              sheetId,
-              startRowIndex:    sheetRow - 1,
-              endRowIndex:      sheetRow,
-              startColumnIndex: 3,
-              endColumnIndex:   7,
-            },
-            cell: { userEnteredFormat: {} },
-            fields: 'userEnteredFormat.backgroundColor',
-          },
-        }],
-      },
-    });
-  }
+  // D/E/F/G background is handled entirely by the conditional formatting rule in
+  // applyConditionalFormatting() — the CUSTOM_FORMULA rule at index 0 checks
+  // column K (CLOSED/OOS/NOT LISTED) AND column M (HIJACKED) and applies light red 2.
+  // No per-row direct formatting needed here.
 }
 
 // ─── HANDLE AMAZON "CONTINUE SHOPPING" SOFT BLOCK ─────────────────────────────
@@ -917,17 +896,14 @@ async function processTab(sheets, tabName, today, now) {
     const dToJ = [desktop.atc, desktop.buy, mobile.atc, mobile.buy, notes, checkedAt, url];
     const lToM = [desktop.stock, alert];
 
-    // Highlight D/E/F/G light red only when: suppressed listing + live + hijacked buy box
-    const highlightButtons = suppressed && !reactivated && alert === '🔴 BUY BOX HIJACKED';
-
     try {
       await sleep(Math.floor(Math.random() * 500) + 100);
-      await writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner, highlightButtons);
+      await writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
       try {
         await sleep(2000);
-        await writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner, highlightButtons);
+        await writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner);
         console.log(`   [${tabName}] ✅ Retry write succeeded for ${asin}`);
       } catch (err2) {
         console.log(`   [${tabName}] ❌ Retry also failed for ${asin}: ${err2.message}`);
