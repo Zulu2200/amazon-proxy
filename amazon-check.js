@@ -404,7 +404,10 @@ async function getAllASINsFromSheet(sheets, tabNames) {
 }
 
 // ─── WRITE ONE ROW (INCLUDES COLUMN N FOR BUY BOX OWNER) ──────────────────────
-async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner) {
+// highlightButtons: if true, colours D/E/F/G light red (suppressed hijack)
+//                  if false, clears colour on D/E/F/G back to white
+async function writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner, highlightButtons = false) {
+  // 1. Write values
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
     requestBody: {
@@ -415,6 +418,53 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner) {
       ],
     },
   });
+
+  // 2. Set background colour on D/E/F/G (columns 3-6, 0-indexed)
+  //    When highlightButtons=true:  apply light red 2 (#F4CCCC) directly
+  //    When highlightButtons=false: clear direct format so conditional formatting
+  //                                 (green for Found ✅) takes back over
+  if (highlightButtons) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex:    sheetRow - 1,
+              endRowIndex:      sheetRow,
+              startColumnIndex: 3,
+              endColumnIndex:   7,
+            },
+            cell: {
+              userEnteredFormat: { backgroundColor: { red: 0.957, green: 0.800, blue: 0.800 } },
+            },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        }],
+      },
+    });
+  } else {
+    // Clear direct background so conditional formatting (green for Found ✅) shows through
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex:    sheetRow - 1,
+              endRowIndex:      sheetRow,
+              startColumnIndex: 3,
+              endColumnIndex:   7,
+            },
+            cell: { userEnteredFormat: {} },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        }],
+      },
+    });
+  }
 }
 
 // ─── HANDLE AMAZON "CONTINUE SHOPPING" SOFT BLOCK ─────────────────────────────
@@ -714,6 +764,14 @@ async function processTab(sheets, tabName, today, now) {
   console.log(`📦  ${tabName}  →  ${marketplace.baseUrl}`);
   console.log(`${'─'.repeat(50)}`);
 
+  // Get numeric sheetId for this tab (needed for background colour formatting)
+  const metaRes = await sheets.spreadsheets.get({
+    spreadsheetId: SHEET_ID,
+    fields: 'sheets(properties(sheetId,title))',
+  });
+  const tabMeta = metaRes.data.sheets.find(s => s.properties.title === tabName);
+  const sheetId = tabMeta ? tabMeta.properties.sheetId : null;
+
   const asins = await getASINs(sheets, tabName);
   if (asins.length === 0) {
     console.log(`   [${tabName}] no ASINs found — skipping`);
@@ -859,14 +917,17 @@ async function processTab(sheets, tabName, today, now) {
     const dToJ = [desktop.atc, desktop.buy, mobile.atc, mobile.buy, notes, checkedAt, url];
     const lToM = [desktop.stock, alert];
 
+    // Highlight D/E/F/G light red only when: suppressed listing + live + hijacked buy box
+    const highlightButtons = suppressed && !reactivated && alert === '🔴 BUY BOX HIJACKED';
+
     try {
       await sleep(Math.floor(Math.random() * 500) + 100);
-      await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner);
+      await writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner, highlightButtons);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
       try {
         await sleep(2000);
-        await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner);
+        await writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner, highlightButtons);
         console.log(`   [${tabName}] ✅ Retry write succeeded for ${asin}`);
       } catch (err2) {
         console.log(`   [${tabName}] ❌ Retry also failed for ${asin}: ${err2.message}`);
