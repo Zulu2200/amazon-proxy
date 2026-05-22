@@ -60,7 +60,7 @@ const MARKETPLACES = {
   'USA':          { baseUrl: 'https://www.amazon.com',    flag: '🇺🇸', proxy: '9.142.43.131:5301'   },
   'Canada':       { baseUrl: 'https://www.amazon.ca',     flag: '🇨🇦', proxy: '192.53.140.18:5114', zipCode: 'M5V 0A1' },
   'UK':           { baseUrl: 'https://www.amazon.co.uk',  flag: '🇬🇧', proxy: '212.212.19.48:6199'  },
- 'Ireland': { baseUrl: 'https://www.amazon.ie', flag: '🇮🇪', proxy: '212.212.18.216:6867' },
+  'Ireland':      { baseUrl: 'https://www.amazon.ie',     flag: '🇮🇪', proxy: '212.212.18.216:6867' },
   'Germany':      { baseUrl: 'https://www.amazon.de',     flag: '🇩🇪', proxy: '166.0.42.187:6195'   },
   'France':       { baseUrl: 'https://www.amazon.fr',     flag: '🇫🇷', proxy: '31.98.4.142:7820'    },
   'Belgium':      { baseUrl: 'https://www.amazon.com.be', flag: '🇧🇪', proxy: '46.203.144.45:7812', zipCode: '1000'    },
@@ -410,11 +410,9 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Canada/Brazil desktop sometimes gets Amazon's soft "Continue shopping" page.
-    // Click through it before trying to detect Add to Cart / Buy Now.
-    if (!isMobile && (baseUrl.includes('amazon.ca') || baseUrl.includes('amazon.com.br'))) {
-      await handleContinueShopping(page, url, baseUrl.includes('amazon.ca') ? 'Canada desktop' : 'Brazil desktop');
-    }
+    // Amazon can show a soft "Continue shopping" page on any marketplace.
+    // This is safe for all marketplaces: if the page is normal, it does nothing.
+    await handleContinueShopping(page, url, `${baseUrl} ${isMobile ? 'mobile' : 'desktop'}`);
 
     // Keep normal marketplaces exactly like before.
     // Only Canada desktop gets a stronger wait because amazon.ca desktop buy box can load late.
@@ -439,6 +437,37 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       /click the button below to continue shopping/i.test(bodySnippet);
 
     if (isBlocked) {
+      const blockedDebug = await page.evaluate(() => {
+        const getText = selector => {
+          const el = document.querySelector(selector);
+          return el ? el.innerText.replace(/\s+/g, ' ').trim().substring(0, 400) : '';
+        };
+
+        const bodyText = document.body
+          ? document.body.innerText.replace(/\s+/g, ' ').trim()
+          : '';
+
+        return {
+          title: document.title,
+          currentUrl: location.href,
+          deliveryLine1: getText('#glow-ingress-line1'),
+          deliveryLine2: getText('#glow-ingress-line2'),
+          availability: getText('#availability, #availability_feature_div'),
+          hasBuybox: !!document.querySelector('#buybox'),
+          hasDesktopBuybox: !!document.querySelector('#desktop_buybox'),
+          hasRightCol: !!document.querySelector('#rightCol'),
+          hasCenterCol: !!document.querySelector('#centerCol'),
+          hasPpd: !!document.querySelector('#ppd'),
+          hasATCId: !!document.querySelector('#add-to-cart-button'),
+          hasBuyNowId: !!document.querySelector('#buy-now-button'),
+          bodyStart: bodyText.substring(0, 900),
+        };
+      }).catch(e => ({ error: e.message }));
+
+      console.log(`🧪 BLOCKED DEBUG START — ${baseUrl} ${isMobile ? 'mobile' : 'desktop'}`);
+      console.log(JSON.stringify(blockedDebug, null, 2));
+      console.log('🧪 BLOCKED DEBUG END');
+
       return {
         atc: 'BLOCKED',
         buy: 'BLOCKED',
@@ -488,7 +517,6 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
     // This tells us what Amazon is actually showing to desktop Puppeteer.
     const needsDesktopDebug =
       !isMobile &&
-      (baseUrl.includes('amazon.ca') || baseUrl.includes('amazon.com.br')) &&
       !pageState.hasATC &&
       !pageState.hasBuy;
 
@@ -651,13 +679,13 @@ async function processTab(sheets, tabName, today, now) {
     const mobile  = await checkPageWithRetry(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
-    // Canada/Brazil desktop rescue:
+    // Desktop rescue for problem marketplaces:
     // If mobile proves the listing is live but desktop missed the buttons,
     // restart Chrome and retry desktop once in a completely fresh browser.
     const earlyDesktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
     const earlyMobileFoundButtons  = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
 
-    if (!earlyDesktopFoundButtons && earlyMobileFoundButtons && ['Canada', 'Brazil'].includes(tabName)) {
+    if (!earlyDesktopFoundButtons && earlyMobileFoundButtons && ['USA', 'Canada', 'Brazil', 'UK', 'Ireland'].includes(tabName)) {
       console.log(`      🔁 Desktop missed buttons but mobile found them — restarting Chrome and retrying desktop once`);
       console.log(`      🔎 Before rescue: desktop ATC=${desktop.atc} Buy=${desktop.buy} Stock=${desktop.stock} | mobile ATC=${mobile.atc} Buy=${mobile.buy} Stock=${mobile.stock}`);
 
