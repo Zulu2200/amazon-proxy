@@ -250,33 +250,33 @@ async function applyConditionalFormatting(sheets) {
 // ─── ENSURE HISTORY TAB WITH PROFESSIONAL FORMATTING ──────────────────────────
 async function ensureHistoryTab(sheets) {
   const meta   = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
-  const exists = meta.data.sheets.some(s => s.properties.title === HISTORY_TAB);
+  const historySheet = meta.data.sheets.find(s => s.properties.title === HISTORY_TAB);
   
   let historySheetId;
   
-  if (!exists) {
+  if (!historySheet) {
     // Create the History tab
+    console.log('📋 Creating History tab...');
     const createRes = await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
       requestBody: { requests: [{ addSheet: { properties: { title: HISTORY_TAB } } }] },
     });
     historySheetId = createRes.data.replies[0].addSheet.properties.sheetId;
-    
-    // Add headers
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `'${HISTORY_TAB}'!A1:H1`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes', 'Buy Box Owner']] },
-    });
-    console.log('📋 History tab created');
   } else {
-    // Get existing History tab sheet ID
-    const historySheet = meta.data.sheets.find(s => s.properties.title === HISTORY_TAB);
     historySheetId = historySheet.properties.sheetId;
   }
 
-  // Apply professional formatting to History tab
+  // Always update/ensure headers are correct (including Buy Box Owner in column H)
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `'${HISTORY_TAB}'!A1:H1`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes', 'Buy Box Owner']] },
+  });
+
+  // Apply professional formatting to History tab (ALWAYS, even if tab existed)
+  console.log('🎨 Formatting History tab...');
+  
   const formatRequests = [
     // Freeze header row
     {
@@ -290,13 +290,15 @@ async function ensureHistoryTab(sheets) {
         fields: 'gridProperties.frozenRowCount'
       }
     },
-    // Bold + background for header row
+    // Bold + background + center alignment for header row
     {
       repeatCell: {
         range: {
           sheetId: historySheetId,
           startRowIndex: 0,
-          endRowIndex: 1
+          endRowIndex: 1,
+          startColumnIndex: 0,
+          endColumnIndex: 8
         },
         cell: {
           userEnteredFormat: {
@@ -306,18 +308,19 @@ async function ensureHistoryTab(sheets) {
               fontSize: 11
             },
             horizontalAlignment: 'CENTER',
+            verticalAlignment: 'MIDDLE',
             borders: {
-              top: { style: 'SOLID', width: 1 },
-              bottom: { style: 'SOLID', width: 2 },
-              left: { style: 'SOLID', width: 1 },
-              right: { style: 'SOLID', width: 1 }
+              top: { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } },
+              bottom: { style: 'SOLID', width: 2, color: { red: 0, green: 0, blue: 0 } },
+              left: { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } },
+              right: { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } }
             }
           }
         },
-        fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,borders)'
+        fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,borders)'
       }
     },
-    // Borders for all data cells
+    // Borders for all data cells (rows 2-10000, columns A-H)
     {
       updateBorders: {
         range: {
@@ -327,69 +330,23 @@ async function ensureHistoryTab(sheets) {
           startColumnIndex: 0,
           endColumnIndex: 8
         },
-        top: { style: 'SOLID', width: 1 },
-        bottom: { style: 'SOLID', width: 1 },
-        left: { style: 'SOLID', width: 1 },
-        right: { style: 'SOLID', width: 1 }
+        top: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        bottom: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        left: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        right: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        innerHorizontal: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        innerVertical: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } }
       }
     },
     // Column widths
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
-        properties: { pixelSize: 100 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
-        properties: { pixelSize: 80 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 },
-        properties: { pixelSize: 120 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 3, endIndex: 4 },
-        properties: { pixelSize: 120 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 },
-        properties: { pixelSize: 100 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 5, endIndex: 6 },
-        properties: { pixelSize: 150 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 },
-        properties: { pixelSize: 300 },
-        fields: 'pixelSize'
-      }
-    },
-    {
-      updateDimensionProperties: {
-        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 },
-        properties: { pixelSize: 150 },
-        fields: 'pixelSize'
-      }
-    },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 }, properties: { pixelSize: 100 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 }, properties: { pixelSize: 80 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 3, endIndex: 4 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 }, properties: { pixelSize: 100 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 5, endIndex: 6 }, properties: { pixelSize: 150 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 }, properties: { pixelSize: 300 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 }, properties: { pixelSize: 150 }, fields: 'pixelSize' } },
   ];
 
   await sheets.spreadsheets.batchUpdate({
@@ -1129,12 +1086,13 @@ async function runSpotCheck(sheets, telegramChatId) {
   console.log(`📱 Spot check results sent to Telegram`);
 }
 
-// ─── FORMAT TELEGRAM SUMMARY ──────────────────────────────────────────────────
+// ─── FORMAT TELEGRAM SUMMARY (FIXED: NO DUPLICATION) ──────────────────────────
 function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   const duration    = Math.round((Date.now() - startTime) / 60000);
   const reactivated = summary.filter(r => r.reactivated);
   const hijacked    = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED');
-  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated);
+  // FIX: Exclude hijacked from general issues to prevent duplication
+  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated && r.alert !== '🔴 BUY BOX HIJACKED');
 
   let msg = `📊 <b>Amazon Check Complete</b>\n`;
   msg += `${'─'.repeat(30)}\n`;
@@ -1168,7 +1126,7 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   if (issues.length === 0 && reactivated.length === 0 && hijacked.length === 0) {
     msg += `✅ All active listings are LIVE with correct Buy Box — no issues!`;
   } else if (issues.length > 0) {
-    msg += `⚠️ <b>${issues.length} issue(s) need attention:</b>\n`;
+    msg += `⚠️ <b>${issues.length} other issue(s) need attention:</b>\n`;
     for (const r of issues) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
       msg += `\n${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
@@ -1180,14 +1138,15 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   return msg;
 }
 
-// ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
+// ─── SEND EMAIL SUMMARY (FIXED: NO DUPLICATION) ───────────────────────────────
 async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
 
   const duration    = Math.round((Date.now() - startTime) / 60000);
   const reactivated = summary.filter(r => r.reactivated);
   const hijacked    = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED');
-  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated);
+  // FIX: Exclude hijacked from general issues to prevent duplication
+  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated && r.alert !== '🔴 BUY BOX HIJACKED');
 
   const makeRows = arr => arr.map(r =>
     `<tr${r.reactivated ? ' style="background:#fff3cd"' : r.alert === '🔴 BUY BOX HIJACKED' ? ' style="background:#ffcccc"' : ''}>
@@ -1225,7 +1184,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     ${issues.length === 0 && reactivated.length === 0 && hijacked.length === 0
       ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>`
       : issues.length > 0
-        ? `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s):</h3>
+        ? `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} other issue(s):</h3>
            <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(issues)}</table>` : ''
     }
     <p style="margin-top:24px;font-family:Arial,sans-serif">
