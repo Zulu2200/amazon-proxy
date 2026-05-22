@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────────
 const SHEET_ID        = '1BQD8Qf9AMM4bhAcnDXAKBKoOwPN929F8Mydo8gzhLyU';
+const EXPECTED_SELLER = 'NEW MIUZ'; // Your seller name - case insensitive matching
 const PROXY_USER      = process.env.PROXY_USER;
 const PROXY_PASS      = process.env.PROXY_PASS;
 const GMAIL_USER      = process.env.GMAIL_USER;
@@ -80,6 +81,7 @@ const COLOR = {
   green: { red: 0.714, green: 0.843, blue: 0.659 },
   red:   { red: 0.918, green: 0.600, blue: 0.600 },
   amber: { red: 1.000, green: 0.898, blue: 0.600 },
+  lightGray: { red: 0.95, green: 0.95, blue: 0.95 },
 };
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
@@ -153,44 +155,87 @@ async function applyConditionalFormatting(sheets) {
 
   for (const sheet of meta.data.sheets) {
     const tabName = sheet.properties.title;
-    if (SKIP_SHEETS.includes(tabName) || !MARKETPLACES[tabName]) continue;
+    
+    // Apply formatting to marketplace tabs
+    if (!SKIP_SHEETS.includes(tabName) && MARKETPLACES[tabName]) {
+      const sheetId       = sheet.properties.sheetId;
+      const existingRules = sheet.conditionalFormats || [];
 
-    const sheetId       = sheet.properties.sheetId;
-    const existingRules = sheet.conditionalFormats || [];
+      for (let i = existingRules.length - 1; i >= 0; i--) {
+        deleteRequests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+      }
 
-    for (let i = existingRules.length - 1; i >= 0; i--) {
-      deleteRequests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+      const buttonRange      = { sheetId, startRowIndex: 1, startColumnIndex: 3,  endColumnIndex: 7  };
+      const stockRange       = { sheetId, startRowIndex: 1, startColumnIndex: 11, endColumnIndex: 12 };
+      const alertRange       = { sheetId, startRowIndex: 1, startColumnIndex: 12, endColumnIndex: 13 };
+      const buyBoxOwnerRange = { sheetId, startRowIndex: 1, startColumnIndex: 13, endColumnIndex: 14 }; // Column N
+
+      const rule = (ranges, containsText, bgColor) => ({
+        addConditionalFormatRule: {
+          rule: {
+            ranges,
+            booleanRule: {
+              condition: { type: 'TEXT_CONTAINS', values: [{ userEnteredValue: containsText }] },
+              format: { backgroundColor: bgColor },
+            },
+          },
+          index: 0,
+        },
+      });
+
+      addRequests.push(rule([buttonRange], 'Found',                 COLOR.green));
+      addRequests.push(rule([buttonRange], 'Missing',               COLOR.red));
+      addRequests.push(rule([buttonRange], 'BLOCKED',               COLOR.amber));
+      addRequests.push(rule([buttonRange], 'Error',                 COLOR.amber));
+      addRequests.push(rule([stockRange],  'In Stock',              COLOR.green));
+      addRequests.push(rule([stockRange],  'left in sto',           COLOR.amber));
+      addRequests.push(rule([stockRange],  'Currently unavailable', COLOR.red));
+      addRequests.push(rule([alertRange],  'LIVE',                  COLOR.green));
+      addRequests.push(rule([alertRange],  'NO BUTTONS',            COLOR.red));
+      addRequests.push(rule([alertRange],  'UNAVAILABLE',           COLOR.red));
+      addRequests.push(rule([alertRange],  'BLOCKED',               COLOR.amber));
+      addRequests.push(rule([alertRange],  'ERROR',                 COLOR.amber));
+      addRequests.push(rule([alertRange],  'HIJACKED',              COLOR.red));
+      addRequests.push(rule([buyBoxOwnerRange], 'NEW MIUZ',         COLOR.green));
+      addRequests.push(rule([buyBoxOwnerRange], 'Hijacked',         COLOR.red));
+      addRequests.push(rule([buyBoxOwnerRange], 'Unknown',          COLOR.amber));
     }
 
-    const buttonRange = { sheetId, startRowIndex: 1, startColumnIndex: 3,  endColumnIndex: 7  };
-    const stockRange  = { sheetId, startRowIndex: 1, startColumnIndex: 11, endColumnIndex: 12 };
-    const alertRange  = { sheetId, startRowIndex: 1, startColumnIndex: 12, endColumnIndex: 13 };
+    // Apply formatting to History tab
+    if (tabName === HISTORY_TAB) {
+      const sheetId       = sheet.properties.sheetId;
+      const existingRules = sheet.conditionalFormats || [];
 
-    const rule = (ranges, containsText, bgColor) => ({
-      addConditionalFormatRule: {
-        rule: {
-          ranges,
-          booleanRule: {
-            condition: { type: 'TEXT_CONTAINS', values: [{ userEnteredValue: containsText }] },
-            format: { backgroundColor: bgColor },
+      for (let i = existingRules.length - 1; i >= 0; i--) {
+        deleteRequests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
+      }
+
+      const statusRange = { sheetId, startRowIndex: 1, startColumnIndex: 5, endColumnIndex: 6 }; // Column F (Status)
+      const buyBoxHistoryRange = { sheetId, startRowIndex: 1, startColumnIndex: 7, endColumnIndex: 8 }; // Column H (Buy Box Owner)
+
+      const rule = (ranges, containsText, bgColor) => ({
+        addConditionalFormatRule: {
+          rule: {
+            ranges,
+            booleanRule: {
+              condition: { type: 'TEXT_CONTAINS', values: [{ userEnteredValue: containsText }] },
+              format: { backgroundColor: bgColor },
+            },
           },
+          index: 0,
         },
-        index: 0,
-      },
-    });
+      });
 
-    addRequests.push(rule([buttonRange], 'Found',                 COLOR.green));
-    addRequests.push(rule([buttonRange], 'Missing',               COLOR.red));
-    addRequests.push(rule([buttonRange], 'BLOCKED',               COLOR.amber));
-    addRequests.push(rule([buttonRange], 'Error',                 COLOR.amber));
-    addRequests.push(rule([stockRange],  'In Stock',              COLOR.green));
-    addRequests.push(rule([stockRange],  'left in sto',           COLOR.amber));
-    addRequests.push(rule([stockRange],  'Currently unavailable', COLOR.red));
-    addRequests.push(rule([alertRange],  'LIVE',                  COLOR.green));
-    addRequests.push(rule([alertRange],  'NO BUTTONS',            COLOR.red));
-    addRequests.push(rule([alertRange],  'UNAVAILABLE',           COLOR.red));
-    addRequests.push(rule([alertRange],  'BLOCKED',               COLOR.amber));
-    addRequests.push(rule([alertRange],  'ERROR',                 COLOR.amber));
+      addRequests.push(rule([statusRange], 'LIVE',         COLOR.green));
+      addRequests.push(rule([statusRange], 'UNAVAILABLE',  COLOR.red));
+      addRequests.push(rule([statusRange], 'NO BUTTONS',   COLOR.red));
+      addRequests.push(rule([statusRange], 'HIJACKED',     COLOR.red));
+      addRequests.push(rule([statusRange], 'BLOCKED',      COLOR.amber));
+      addRequests.push(rule([statusRange], 'ERROR',        COLOR.amber));
+      addRequests.push(rule([statusRange], 'REACTIVATED',  COLOR.green));
+      addRequests.push(rule([buyBoxHistoryRange], 'NEW MIUZ',  COLOR.green));
+      addRequests.push(rule([buyBoxHistoryRange], 'Hijacked',  COLOR.red));
+    }
   }
 
   if (deleteRequests.length > 0) {
@@ -202,30 +247,164 @@ async function applyConditionalFormatting(sheets) {
   console.log('✅ Conditional formatting applied\n');
 }
 
-// ─── ENSURE HISTORY TAB ────────────────────────────────────────────────────────
+// ─── ENSURE HISTORY TAB WITH PROFESSIONAL FORMATTING ──────────────────────────
 async function ensureHistoryTab(sheets) {
   const meta   = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   const exists = meta.data.sheets.some(s => s.properties.title === HISTORY_TAB);
+  
+  let historySheetId;
+  
   if (!exists) {
-    await sheets.spreadsheets.batchUpdate({
+    // Create the History tab
+    const createRes = await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
       requestBody: { requests: [{ addSheet: { properties: { title: HISTORY_TAB } } }] },
     });
+    historySheetId = createRes.data.replies[0].addSheet.properties.sheetId;
+    
+    // Add headers
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `'${HISTORY_TAB}'!A1:G1`,
+      range: `'${HISTORY_TAB}'!A1:H1`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes']] },
+      requestBody: { values: [['Date', 'Time', 'Marketplace', 'ASIN', 'SKU', 'Status', 'Notes', 'Buy Box Owner']] },
     });
-    console.log('📋 History tab created\n');
+    console.log('📋 History tab created');
+  } else {
+    // Get existing History tab sheet ID
+    const historySheet = meta.data.sheets.find(s => s.properties.title === HISTORY_TAB);
+    historySheetId = historySheet.properties.sheetId;
   }
+
+  // Apply professional formatting to History tab
+  const formatRequests = [
+    // Freeze header row
+    {
+      updateSheetProperties: {
+        properties: {
+          sheetId: historySheetId,
+          gridProperties: {
+            frozenRowCount: 1
+          }
+        },
+        fields: 'gridProperties.frozenRowCount'
+      }
+    },
+    // Bold + background for header row
+    {
+      repeatCell: {
+        range: {
+          sheetId: historySheetId,
+          startRowIndex: 0,
+          endRowIndex: 1
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: COLOR.lightGray,
+            textFormat: {
+              bold: true,
+              fontSize: 11
+            },
+            horizontalAlignment: 'CENTER',
+            borders: {
+              top: { style: 'SOLID', width: 1 },
+              bottom: { style: 'SOLID', width: 2 },
+              left: { style: 'SOLID', width: 1 },
+              right: { style: 'SOLID', width: 1 }
+            }
+          }
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,borders)'
+      }
+    },
+    // Borders for all data cells
+    {
+      updateBorders: {
+        range: {
+          sheetId: historySheetId,
+          startRowIndex: 1,
+          endRowIndex: 10000,
+          startColumnIndex: 0,
+          endColumnIndex: 8
+        },
+        top: { style: 'SOLID', width: 1 },
+        bottom: { style: 'SOLID', width: 1 },
+        left: { style: 'SOLID', width: 1 },
+        right: { style: 'SOLID', width: 1 }
+      }
+    },
+    // Column widths
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+        properties: { pixelSize: 100 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
+        properties: { pixelSize: 80 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 },
+        properties: { pixelSize: 120 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 3, endIndex: 4 },
+        properties: { pixelSize: 120 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 },
+        properties: { pixelSize: 100 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 5, endIndex: 6 },
+        properties: { pixelSize: 150 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 },
+        properties: { pixelSize: 300 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 },
+        properties: { pixelSize: 150 },
+        fields: 'pixelSize'
+      }
+    },
+  ];
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SHEET_ID,
+    requestBody: { requests: formatRequests }
+  });
+
+  console.log('✅ History tab formatted\n');
 }
 
-// ─── APPEND TO HISTORY ─────────────────────────────────────────────────────────
+// ─── APPEND TO HISTORY (NOW WITH BUY BOX OWNER) ───────────────────────────────
 async function appendToHistory(sheets, historyRows) {
   if (historyRows.length === 0) return;
   await sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID, range: `'${HISTORY_TAB}'!A:G`,
+    spreadsheetId: SHEET_ID, range: `'${HISTORY_TAB}'!A:H`,
     valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
     requestBody: { values: historyRows },
   });
@@ -272,15 +451,15 @@ async function getAllASINsFromSheet(sheets, tabNames) {
   return result;
 }
 
-// ─── WRITE ONE ROW ─────────────────────────────────────────────────────────────
-async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM) {
+// ─── WRITE ONE ROW (NOW INCLUDES COLUMN N FOR BUY BOX OWNER) ──────────────────
+async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
     requestBody: {
       valueInputOption: 'USER_ENTERED',
       data: [
         { range: `'${tabName}'!D${sheetRow}:J${sheetRow}`, values: [dToJ] },
-        { range: `'${tabName}'!L${sheetRow}:M${sheetRow}`, values: [lToM] },
+        { range: `'${tabName}'!L${sheetRow}:N${sheetRow}`, values: [[lToM[0], lToM[1], buyBoxOwner]] },
       ],
     },
   });
@@ -475,7 +654,9 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
           ? 'Amazon Continue Shopping soft block'
           : 'CAPTCHA detected',
         isBlocked: true,
-        isUnavailable: false
+        isUnavailable: false,
+        isOurBuyBox: false,
+        buyBoxPreview: '',
       };
     }
 
@@ -558,13 +739,58 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       console.log('🧪 DESKTOP DEBUG END');
     }
 
-    // Buttons win. This restores the old reliable mobile behavior, while still
-    // allowing Canada desktop to detect alternate Amazon button inputs.
+    // Buttons found — check Buy Box ownership (language-agnostic)
     if (pageState.hasATC || pageState.hasBuy) {
+      const buyBoxInfo = await page.evaluate((expectedSeller) => {
+        // Amazon's Buy Box area has consistent IDs across all marketplaces
+        const buyBoxSelectors = [
+          '#merchant-info',              // Desktop standard
+          '#sellerProfileTriggerId',     // Desktop alternate  
+          '#tabular-buybox-truncate-0',  // Desktop new layout
+          '#tabular-buybox',             // Desktop tabular
+          '#soldByThirdParty',           // Third-party indicator
+          '#availability',               // Sometimes contains seller
+          '#buybox',                     // Buy Box container
+          '#desktop_buybox',             // Desktop Buy Box
+          '#apex_desktop',               // Desktop apex
+        ];
+        
+        let foundText = '';
+        for (const selector of buyBoxSelectors) {
+          const el = document.querySelector(selector);
+          if (el) {
+            foundText += ' ' + (el.innerText || el.textContent || '');
+          }
+        }
+        
+        // Also check the entire right column (where Buy Box lives)
+        const rightCol = document.querySelector('#rightCol, #apex_desktop, #buybox-module');
+        if (rightCol) {
+          foundText += ' ' + (rightCol.innerText || rightCol.textContent || '');
+        }
+        
+        // Clean up text
+        foundText = foundText.replace(/\s+/g, ' ').trim();
+        
+        // Check if our seller name appears in the Buy Box area
+        const hasOurName = foundText.toLowerCase().includes(expectedSeller.toLowerCase());
+        
+        // Try to extract who the seller is (first 200 chars of Buy Box text for debugging)
+        const buyBoxPreview = foundText.substring(0, 200);
+        
+        return {
+          hasOurName,
+          buyBoxPreview,
+          fullLength: foundText.length,
+        };
+      }, EXPECTED_SELLER).catch(() => ({ hasOurName: false, buyBoxPreview: '', fullLength: 0 }));
+
       return {
         atc:           pageState.hasATC ? 'Found ✅' : 'Missing ❌',
         buy:           pageState.hasBuy ? 'Found ✅' : 'Missing ❌',
         stock:         pageState.stockText.substring(0, 60) || 'In Stock',
+        isOurBuyBox:   buyBoxInfo.hasOurName,
+        buyBoxPreview: buyBoxInfo.buyBoxPreview,
         isBlocked:     false,
         isUnavailable: false,
       };
@@ -579,6 +805,8 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
         stock: pageState.stockText.substring(0, 60) || 'Unavailable',
         isBlocked: false,
         isUnavailable: true,
+        isOurBuyBox: false,
+        buyBoxPreview: '',
       };
     }
 
@@ -588,9 +816,19 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       stock:         pageState.stockText.substring(0, 60) || 'No buttons found',
       isBlocked:     false,
       isUnavailable: false,
+      isOurBuyBox:   false,
+      buyBoxPreview: '',
     };
   } catch (err) {
-    return { atc: 'Error', buy: 'Error', stock: (err.message || '').substring(0, 60), isBlocked: false, isUnavailable: false };
+    return { 
+      atc: 'Error', 
+      buy: 'Error', 
+      stock: (err.message || '').substring(0, 60), 
+      isBlocked: false, 
+      isUnavailable: false,
+      isOurBuyBox: false,
+      buyBoxPreview: '',
+    };
   } finally {
     await page.close().catch(() => {});
   }
@@ -627,9 +865,9 @@ async function processTab(sheets, tabName, today, now) {
 
   const [proxyHost, proxyPort] = marketplace.proxy.split(':');
 
-  // Minimal restart logic: only for Canada/Brazil, where desktop can degrade
+  // Minimal restart logic: only for Brazil, where desktop can degrade
   // after several product pages. Other marketplaces stay unchanged.
-  const RESTART_MARKETS = ['Brazil']; // Canada removed: restart was causing Amazon's desktop soft-block page
+  const RESTART_MARKETS = ['Brazil'];
   const RESTART_EVERY = RESTART_MARKETS.includes(tabName) ? 8 : 9999;
   let browser = null;
   let checksInThisBrowser = 0;
@@ -708,18 +946,47 @@ async function processTab(sheets, tabName, today, now) {
     const mobileFoundButtons = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
     const desktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
 
+    // Determine Buy Box owner to display in column N
+    let buyBoxOwner = 'N/A';
+    
     if (desktop.isBlocked && !mobileFoundButtons) {
       alert = '⚠️ BLOCKED'; notes = 'Amazon blocked this check'; totalBlocked++;
     } else if (desktop.atc === 'Error' && !mobileFoundButtons) {
       alert = '⚠️ ERROR'; notes = desktop.stock; totalErrors++;
     } else if (desktopFoundButtons || mobileFoundButtons) {
-      // Either desktop or mobile found buttons — listing is LIVE
-      alert = '✅ LIVE';
-      // Add note if desktop disagreed with mobile
-      if (!desktopFoundButtons && mobileFoundButtons) {
-        notes = 'Mobile confirmed live (desktop detection issue)';
+      // Buttons found - check if Buy Box is ours
+      const isOurBuyBox = desktop.isOurBuyBox || mobile.isOurBuyBox || false;
+      
+      if (!isOurBuyBox) {
+        alert = '🔴 BUY BOX HIJACKED';
+        notes = 'Buy Box not showing NEW MIUZ';
+        
+        // Try to extract the actual seller name from Buy Box preview
+        const preview = desktop.buyBoxPreview || mobile.buyBoxPreview || '';
+        if (preview) {
+          console.log(`      ⚠️ Buy Box preview: "${preview}"`);
+          
+          // Try to find seller name in preview (works across languages)
+          const soldByMatch = preview.match(/(?:sold by|vendu par|verkauft von|vendido por|venduto da|verkocht door|sprzedawane przez|såld av|vendido por)[:\s]+([^\n\r.]+)/i);
+          if (soldByMatch) {
+            buyBoxOwner = soldByMatch[1].trim().substring(0, 50);
+          } else {
+            buyBoxOwner = 'Hijacked (unknown)';
+          }
+        } else {
+          buyBoxOwner = 'Hijacked (unknown)';
+        }
+      } else {
+        alert = '✅ LIVE';
+        buyBoxOwner = 'NEW MIUZ';
+        
+        // Add note if desktop disagreed with mobile
+        if (!desktopFoundButtons && mobileFoundButtons) {
+          notes = 'Mobile confirmed live (desktop detection issue)';
+        }
       }
-      if (suppressed) {
+      
+      if (suppressed && isOurBuyBox) {
         reactivated = true;
         alert = '🟢 REACTIVATED';
         notes = `Was marked ${manualNote.toUpperCase()} but is now LIVE!`;
@@ -738,20 +1005,20 @@ async function processTab(sheets, tabName, today, now) {
     try {
       // Small random delay before writing to avoid parallel write conflicts
       await sleep(Math.floor(Math.random() * 500) + 100);
-      await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
+      await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
       // Retry once after a longer delay
       try {
         await sleep(2000);
-        await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM);
+        await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner);
         console.log(`   [${tabName}] ✅ Retry write succeeded for ${asin}`);
       } catch (err2) {
         console.log(`   [${tabName}] ❌ Retry also failed for ${asin}: ${err2.message}`);
       }
     }
 
-    historyRows.push([today, now, tabName, asin, sku, alert, notes]);
+    historyRows.push([today, now, tabName, asin, sku, alert, notes, buyBoxOwner]);
     summary.push({
       marketplace: tabName,
       asin, sku, alert, notes,
@@ -820,15 +1087,26 @@ async function runSpotCheck(sheets, telegramChatId) {
 
       let status = '';
       let detail = '';
+      let spotBuyBoxOwner = 'N/A';
 
       if (desktop.isBlocked)           { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
       else if (desktop.atc === 'Error') { status = '⚠️ ERROR';       detail = desktop.stock; }
       else if (desktop.isUnavailable)   { status = '🔴 UNAVAILABLE'; detail = desktop.stock || 'Unavailable'; }
-      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { status = '✅ LIVE'; detail = desktop.stock; }
+      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { 
+        if (!desktop.isOurBuyBox) {
+          status = '🔴 HIJACKED'; 
+          detail = 'Buy Box not owned by NEW MIUZ';
+          spotBuyBoxOwner = 'Hijacked (unknown)';
+        } else {
+          status = '✅ LIVE'; 
+          detail = desktop.stock;
+          spotBuyBoxOwner = 'NEW MIUZ';
+        }
+      }
       else                              { status = '🔴 NO BUTTONS';  detail = desktop.stock || 'No buttons found'; }
 
       results.push({ market, identifier, asin, sku, status, detail });
-      historyRows.push([today, now, market, asin, sku, status, (detail || '') + ' (spot check)']);
+      historyRows.push([today, now, market, asin, sku, status, (detail || '') + ' (spot check)', spotBuyBoxOwner]);
       console.log(`   [${market}] ${identifier} (${asin}) → ${status}`);
       await sleep(randomDelay());
     }
@@ -855,6 +1133,7 @@ async function runSpotCheck(sheets, telegramChatId) {
 function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   const duration    = Math.round((Date.now() - startTime) / 60000);
   const reactivated = summary.filter(r => r.reactivated);
+  const hijacked    = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED');
   const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated);
 
   let msg = `📊 <b>Amazon Check Complete</b>\n`;
@@ -866,6 +1145,16 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   if (totalErrors  > 0) msg += `❌ ${totalErrors} errors\n`;
   msg += '\n';
 
+  if (hijacked.length > 0) {
+    msg += `🚨 <b>URGENT — ${hijacked.length} Buy Box HIJACKED:</b>\n`;
+    for (const r of hijacked) {
+      const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
+      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  <i>${r.notes}</i>\n`;
+    }
+    msg += '\n';
+  }
+
   if (reactivated.length > 0) {
     msg += `🚨 <b>URGENT — ${reactivated.length} previously closed listing(s) now LIVE:</b>\n`;
     for (const r of reactivated) {
@@ -876,8 +1165,8 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
     msg += '\n';
   }
 
-  if (issues.length === 0 && reactivated.length === 0) {
-    msg += `✅ All active listings are LIVE — no issues!`;
+  if (issues.length === 0 && reactivated.length === 0 && hijacked.length === 0) {
+    msg += `✅ All active listings are LIVE with correct Buy Box — no issues!`;
   } else if (issues.length > 0) {
     msg += `⚠️ <b>${issues.length} issue(s) need attention:</b>\n`;
     for (const r of issues) {
@@ -897,10 +1186,11 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
 
   const duration    = Math.round((Date.now() - startTime) / 60000);
   const reactivated = summary.filter(r => r.reactivated);
+  const hijacked    = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED');
   const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated);
 
   const makeRows = arr => arr.map(r =>
-    `<tr${r.reactivated ? ' style="background:#fff3cd"' : ''}>
+    `<tr${r.reactivated ? ' style="background:#fff3cd"' : r.alert === '🔴 BUY BOX HIJACKED' ? ' style="background:#ffcccc"' : ''}>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.asin}</td>
       <td style="padding:4px 8px;border:1px solid #ddd">${r.sku}</td>
@@ -926,11 +1216,14 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked<br>` : ''}
       ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>` : ''}
     </p>
+    ${hijacked.length > 0 ? `
+      <h3 style="color:#c00;font-family:Arial,sans-serif">🚨 URGENT — Buy Box HIJACKED:</h3>
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(hijacked)}</table><br>` : ''}
     ${reactivated.length > 0 ? `
       <h3 style="color:#856404;font-family:Arial,sans-serif">🚨 URGENT — Previously closed listing(s) now LIVE:</h3>
       <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(reactivated)}</table><br>` : ''}
-    ${issues.length === 0 && reactivated.length === 0
-      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE — no issues!</p>`
+    ${issues.length === 0 && reactivated.length === 0 && hijacked.length === 0
+      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>`
       : issues.length > 0
         ? `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} issue(s):</h3>
            <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(issues)}</table>` : ''
@@ -939,9 +1232,11 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       <a href="${SHEET_URL}" style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Open Google Sheet</a>
     </p>`;
 
-  const hasUrgent = reactivated.length > 0;
+  const hasUrgent = reactivated.length > 0 || hijacked.length > 0;
   const subject = hasUrgent
-    ? `🚨 URGENT — ${reactivated.length} closed listing(s) now LIVE (${muTime()})`
+    ? hijacked.length > 0
+      ? `🚨 URGENT — ${hijacked.length} Buy Box HIJACKED (${muTime()})`
+      : `🚨 URGENT — ${reactivated.length} closed listing(s) now LIVE (${muTime()})`
     : issues.length === 0
       ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
       : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`;
