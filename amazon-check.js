@@ -38,8 +38,9 @@ const AFTER_SAUDI = ['UAE'];
 const randomDelay = () => Math.floor(Math.random() * 3000) + 2000;
 
 // ─── SUPPRESSED KEYWORDS (column K) ───────────────────────────────────────────
-// If manual note matches any of these, suppress from email/Telegram alerts
-// (but still check, write to sheet, write to history)
+// If manual note matches any of these, the listing is "manually suppressed"
+// We still check it and write to sheet, but we DON'T send alerts
+// UNLESS it has come back live with NEW MIUZ owning the buy box (REACTIVATED)
 const isSuppressed = note => /^(closed|oos|not listed)$/i.test((note || '').trim());
 
 // ─── UNAVAILABLE PHRASES ───────────────────────────────────────────────────────
@@ -78,10 +79,10 @@ const MARKETPLACES = {
 
 // ─── COLORS ────────────────────────────────────────────────────────────────────
 const COLOR = {
-  green: { red: 0.714, green: 0.843, blue: 0.659 },
-  red:   { red: 0.918, green: 0.600, blue: 0.600 },
-  amber: { red: 1.000, green: 0.898, blue: 0.600 },
-  lightGray: { red: 0.95, green: 0.95, blue: 0.95 },
+  green:     { red: 0.714, green: 0.843, blue: 0.659 },
+  red:       { red: 0.918, green: 0.600, blue: 0.600 },
+  amber:     { red: 1.000, green: 0.898, blue: 0.600 },
+  lightGray: { red: 0.95,  green: 0.95,  blue: 0.95  },
 };
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ async function applyConditionalFormatting(sheets) {
 
   for (const sheet of meta.data.sheets) {
     const tabName = sheet.properties.title;
-    
+
     // Apply formatting to marketplace tabs
     if (!SKIP_SHEETS.includes(tabName) && MARKETPLACES[tabName]) {
       const sheetId       = sheet.properties.sheetId;
@@ -210,8 +211,8 @@ async function applyConditionalFormatting(sheets) {
         deleteRequests.push({ deleteConditionalFormatRule: { sheetId, index: i } });
       }
 
-      const statusRange = { sheetId, startRowIndex: 1, startColumnIndex: 5, endColumnIndex: 6 }; // Column F (Status)
-      const buyBoxHistoryRange = { sheetId, startRowIndex: 1, startColumnIndex: 7, endColumnIndex: 8 }; // Column H (Buy Box Owner)
+      const statusRange        = { sheetId, startRowIndex: 1, startColumnIndex: 5, endColumnIndex: 6 }; // Column F
+      const buyBoxHistoryRange = { sheetId, startRowIndex: 1, startColumnIndex: 7, endColumnIndex: 8 }; // Column H
 
       const rule = (ranges, containsText, bgColor) => ({
         addConditionalFormatRule: {
@@ -249,13 +250,12 @@ async function applyConditionalFormatting(sheets) {
 
 // ─── ENSURE HISTORY TAB WITH PROFESSIONAL FORMATTING ──────────────────────────
 async function ensureHistoryTab(sheets) {
-  const meta   = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const meta        = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   const historySheet = meta.data.sheets.find(s => s.properties.title === HISTORY_TAB);
-  
+
   let historySheetId;
-  
+
   if (!historySheet) {
-    // Create the History tab
     console.log('📋 Creating History tab...');
     const createRes = await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
@@ -276,16 +276,14 @@ async function ensureHistoryTab(sheets) {
 
   // Apply professional formatting to History tab (ALWAYS, even if tab existed)
   console.log('🎨 Formatting History tab...');
-  
+
   const formatRequests = [
     // Freeze header row
     {
       updateSheetProperties: {
         properties: {
           sheetId: historySheetId,
-          gridProperties: {
-            frozenRowCount: 1
-          }
+          gridProperties: { frozenRowCount: 1 }
         },
         fields: 'gridProperties.frozenRowCount'
       }
@@ -303,17 +301,14 @@ async function ensureHistoryTab(sheets) {
         cell: {
           userEnteredFormat: {
             backgroundColor: COLOR.lightGray,
-            textFormat: {
-              bold: true,
-              fontSize: 11
-            },
+            textFormat: { bold: true, fontSize: 11 },
             horizontalAlignment: 'CENTER',
             verticalAlignment: 'MIDDLE',
             borders: {
-              top: { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } },
+              top:    { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } },
               bottom: { style: 'SOLID', width: 2, color: { red: 0, green: 0, blue: 0 } },
-              left: { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } },
-              right: { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } }
+              left:   { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } },
+              right:  { style: 'SOLID', width: 1, color: { red: 0, green: 0, blue: 0 } }
             }
           }
         },
@@ -330,17 +325,17 @@ async function ensureHistoryTab(sheets) {
           startColumnIndex: 0,
           endColumnIndex: 8
         },
-        top: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
-        bottom: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
-        left: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
-        right: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        top:             { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        bottom:          { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        left:            { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
+        right:           { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
         innerHorizontal: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } },
-        innerVertical: { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } }
+        innerVertical:   { style: 'SOLID', width: 1, color: { red: 0.8, green: 0.8, blue: 0.8 } }
       }
     },
     // Column widths
     { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 }, properties: { pixelSize: 100 }, fields: 'pixelSize' } },
-    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 }, properties: { pixelSize: 80 }, fields: 'pixelSize' } },
+    { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 }, properties: { pixelSize: 80  }, fields: 'pixelSize' } },
     { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: 3 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
     { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 3, endIndex: 4 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
     { updateDimensionProperties: { range: { sheetId: historySheetId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 }, properties: { pixelSize: 100 }, fields: 'pixelSize' } },
@@ -357,7 +352,7 @@ async function ensureHistoryTab(sheets) {
   console.log('✅ History tab formatted\n');
 }
 
-// ─── APPEND TO HISTORY (NOW WITH BUY BOX OWNER) ───────────────────────────────
+// ─── APPEND TO HISTORY ─────────────────────────────────────────────────────────
 async function appendToHistory(sheets, historyRows) {
   if (historyRows.length === 0) return;
   await sheets.spreadsheets.values.append({
@@ -408,7 +403,7 @@ async function getAllASINsFromSheet(sheets, tabNames) {
   return result;
 }
 
-// ─── WRITE ONE ROW (NOW INCLUDES COLUMN N FOR BUY BOX OWNER) ──────────────────
+// ─── WRITE ONE ROW (INCLUDES COLUMN N FOR BUY BOX OWNER) ──────────────────────
 async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner) {
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SHEET_ID,
@@ -422,11 +417,7 @@ async function writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner) {
   });
 }
 
-
 // ─── HANDLE AMAZON "CONTINUE SHOPPING" SOFT BLOCK ─────────────────────────────
-// Amazon sometimes shows a soft interstitial on desktop:
-// "Click the button below to continue shopping". This is not a product page.
-// We click the Continue shopping button and wait before checking product buttons.
 async function handleContinueShopping(page, url, label = '') {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const bodyText = await page.evaluate(() =>
@@ -493,8 +484,6 @@ async function handleContinueShopping(page, url, label = '') {
       return true;
     }
 
-    // Some Amazon versions do not navigate cleanly after clicking.
-    // Reload the target product URL once after clicking through.
     if (attempt === 1) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
       await sleep(3000);
@@ -503,7 +492,6 @@ async function handleContinueShopping(page, url, label = '') {
 
   return true;
 }
-
 
 // ─── CHECK A SINGLE AMAZON PAGE ────────────────────────────────────────────────
 async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
@@ -546,12 +534,8 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Amazon can show a soft "Continue shopping" page on any marketplace.
-    // This is safe for all marketplaces: if the page is normal, it does nothing.
     await handleContinueShopping(page, url, `${baseUrl} ${isMobile ? 'mobile' : 'desktop'}`);
 
-    // Keep normal marketplaces exactly like before.
-    // Only Canada desktop gets a stronger wait because amazon.ca desktop buy box can load late.
     const isCanadaDesktop = baseUrl.includes('amazon.ca') && !isMobile;
     const waitSelector = isCanadaDesktop
       ? '#add-to-cart-button, #buy-now-button, input[name="submit.add-to-cart"], input[name="submit.buy-now"], #availability, #availability_feature_div, #captchacharacters'
@@ -573,37 +557,6 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       /click the button below to continue shopping/i.test(bodySnippet);
 
     if (isBlocked) {
-      const blockedDebug = await page.evaluate(() => {
-        const getText = selector => {
-          const el = document.querySelector(selector);
-          return el ? el.innerText.replace(/\s+/g, ' ').trim().substring(0, 400) : '';
-        };
-
-        const bodyText = document.body
-          ? document.body.innerText.replace(/\s+/g, ' ').trim()
-          : '';
-
-        return {
-          title: document.title,
-          currentUrl: location.href,
-          deliveryLine1: getText('#glow-ingress-line1'),
-          deliveryLine2: getText('#glow-ingress-line2'),
-          availability: getText('#availability, #availability_feature_div'),
-          hasBuybox: !!document.querySelector('#buybox'),
-          hasDesktopBuybox: !!document.querySelector('#desktop_buybox'),
-          hasRightCol: !!document.querySelector('#rightCol'),
-          hasCenterCol: !!document.querySelector('#centerCol'),
-          hasPpd: !!document.querySelector('#ppd'),
-          hasATCId: !!document.querySelector('#add-to-cart-button'),
-          hasBuyNowId: !!document.querySelector('#buy-now-button'),
-          bodyStart: bodyText.substring(0, 900),
-        };
-      }).catch(e => ({ error: e.message }));
-
-      console.log(`🧪 BLOCKED DEBUG START — ${baseUrl} ${isMobile ? 'mobile' : 'desktop'}`);
-      console.log(JSON.stringify(blockedDebug, null, 2));
-      console.log('🧪 BLOCKED DEBUG END');
-
       return {
         atc: 'BLOCKED',
         buy: 'BLOCKED',
@@ -651,67 +604,21 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       };
     }).catch(() => ({ hasATC: false, hasBuy: false, hasPurchaseBox: false, stockText: '' }));
 
-    // Detailed desktop debug logs for Canada/Brazil only.
-    // This tells us what Amazon is actually showing to desktop Puppeteer.
-    const needsDesktopDebug =
-      !isMobile &&
-      !pageState.hasATC &&
-      !pageState.hasBuy;
-
-    if (needsDesktopDebug) {
-      const desktopDebug = await page.evaluate(() => {
-        const getText = selector => {
-          const el = document.querySelector(selector);
-          return el ? el.innerText.replace(/\s+/g, ' ').trim().substring(0, 400) : '';
-        };
-
-        const bodyText = document.body
-          ? document.body.innerText.replace(/\s+/g, ' ').trim()
-          : '';
-
-        return {
-          title: document.title,
-          currentUrl: location.href,
-          deliveryLine1: getText('#glow-ingress-line1'),
-          deliveryLine2: getText('#glow-ingress-line2'),
-          availability: getText('#availability, #availability_feature_div'),
-          hasBuybox: !!document.querySelector('#buybox'),
-          hasDesktopBuybox: !!document.querySelector('#desktop_buybox'),
-          hasRightCol: !!document.querySelector('#rightCol'),
-          hasCenterCol: !!document.querySelector('#centerCol'),
-          hasPpd: !!document.querySelector('#ppd'),
-          hasNewAccordionRow: !!document.querySelector('#newAccordionRow'),
-          hasATCId: !!document.querySelector('#add-to-cart-button'),
-          hasBuyNowId: !!document.querySelector('#buy-now-button'),
-          hasATCInput: !!document.querySelector('input[name="submit.add-to-cart"]'),
-          hasBuyNowInput: !!document.querySelector('input[name="submit.buy-now"]'),
-          hasAllBuyingOptionsText: /see all buying options|ver todas as opções de compra|voir toutes les options d'achat/i.test(bodyText),
-          hasUnavailableText: /currently unavailable|not available|atualmente indisponível|indisponível|sem estoque/i.test(bodyText),
-          bodyStart: bodyText.substring(0, 900),
-        };
-      }).catch(e => ({ error: e.message }));
-
-      console.log('🧪 DESKTOP DEBUG START');
-      console.log(JSON.stringify(desktopDebug, null, 2));
-      console.log('🧪 DESKTOP DEBUG END');
-    }
-
-    // Buttons found — check Buy Box ownership (language-agnostic)
+    // BUY BOX DETECTION (LANGUAGE-AGNOSTIC)
     if (pageState.hasATC || pageState.hasBuy) {
       const buyBoxInfo = await page.evaluate((expectedSeller) => {
-        // Amazon's Buy Box area has consistent IDs across all marketplaces
         const buyBoxSelectors = [
-          '#merchant-info',              // Desktop standard
-          '#sellerProfileTriggerId',     // Desktop alternate  
-          '#tabular-buybox-truncate-0',  // Desktop new layout
-          '#tabular-buybox',             // Desktop tabular
-          '#soldByThirdParty',           // Third-party indicator
-          '#availability',               // Sometimes contains seller
-          '#buybox',                     // Buy Box container
-          '#desktop_buybox',             // Desktop Buy Box
-          '#apex_desktop',               // Desktop apex
+          '#merchant-info',
+          '#sellerProfileTriggerId',
+          '#tabular-buybox-truncate-0',
+          '#tabular-buybox',
+          '#soldByThirdParty',
+          '#availability',
+          '#buybox',
+          '#desktop_buybox',
+          '#apex_desktop',
         ];
-        
+
         let foundText = '';
         for (const selector of buyBoxSelectors) {
           const el = document.querySelector(selector);
@@ -719,22 +626,17 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
             foundText += ' ' + (el.innerText || el.textContent || '');
           }
         }
-        
-        // Also check the entire right column (where Buy Box lives)
+
         const rightCol = document.querySelector('#rightCol, #apex_desktop, #buybox-module');
         if (rightCol) {
           foundText += ' ' + (rightCol.innerText || rightCol.textContent || '');
         }
-        
-        // Clean up text
+
         foundText = foundText.replace(/\s+/g, ' ').trim();
-        
-        // Check if our seller name appears in the Buy Box area
-        const hasOurName = foundText.toLowerCase().includes(expectedSeller.toLowerCase());
-        
-        // Try to extract who the seller is (first 200 chars of Buy Box text for debugging)
+
+        const hasOurName   = foundText.toLowerCase().includes(expectedSeller.toLowerCase());
         const buyBoxPreview = foundText.substring(0, 200);
-        
+
         return {
           hasOurName,
           buyBoxPreview,
@@ -753,7 +655,7 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       };
     }
 
-    const availText = pageState.stockText.toLowerCase();
+    const availText    = pageState.stockText.toLowerCase();
     const isUnavailable = UNAVAILABLE_PHRASES.some(p => availText.includes(p)) || !pageState.hasPurchaseBox;
     if (isUnavailable) {
       return {
@@ -777,11 +679,11 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       buyBoxPreview: '',
     };
   } catch (err) {
-    return { 
-      atc: 'Error', 
-      buy: 'Error', 
-      stock: (err.message || '').substring(0, 60), 
-      isBlocked: false, 
+    return {
+      atc: 'Error',
+      buy: 'Error',
+      stock: (err.message || '').substring(0, 60),
+      isBlocked: false,
       isUnavailable: false,
       isOurBuyBox: false,
       buyBoxPreview: '',
@@ -795,7 +697,6 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
 async function checkPageWithRetry(browser, url, isMobile, baseUrl, zipCode) {
   const result = await checkPage(browser, url, isMobile, baseUrl, zipCode);
 
-  // Retry once if blocked or error
   if (result.isBlocked || result.atc === 'Error') {
     console.log(`      ↩ Retrying in 10 seconds...`);
     await sleep(10000);
@@ -822,11 +723,9 @@ async function processTab(sheets, tabName, today, now) {
 
   const [proxyHost, proxyPort] = marketplace.proxy.split(':');
 
-  // Minimal restart logic: only for Brazil, where desktop can degrade
-  // after several product pages. Other marketplaces stay unchanged.
   const RESTART_MARKETS = ['Brazil'];
-  const RESTART_EVERY = RESTART_MARKETS.includes(tabName) ? 8 : 9999;
-  let browser = null;
+  const RESTART_EVERY   = RESTART_MARKETS.includes(tabName) ? 8 : 9999;
+  let browser           = null;
   let checksInThisBrowser = 0;
 
   async function launchMarketBrowser() {
@@ -863,35 +762,28 @@ async function processTab(sheets, tabName, today, now) {
       await sleep(5000);
     }
 
-    const url       = `${marketplace.baseUrl}/dp/${asin}`;
-    const checkedAt = muTime();
+    const url        = `${marketplace.baseUrl}/dp/${asin}`;
+    const checkedAt  = muTime();
     const suppressed = isSuppressed(manualNote);
 
     process.stdout.write(`   [${tabName}] ${asin}${suppressed ? ' [' + manualNote.toUpperCase() + ']' : ''}  `);
 
     let desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
-    const mobile  = await checkPageWithRetry(browser, url, true,  marketplace.baseUrl, marketplace.zipCode);
+    const mobile = await checkPageWithRetry(browser, url, true, marketplace.baseUrl, marketplace.zipCode);
     await sleep(randomDelay());
 
-    // Desktop rescue for problem marketplaces:
-    // If mobile proves the listing is live but desktop missed the buttons,
-    // restart Chrome and retry desktop once in a completely fresh browser.
+    // DESKTOP RESCUE FOR PROBLEM MARKETPLACES
     const earlyDesktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
-    const earlyMobileFoundButtons  = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
+    const earlyMobileFoundButtons  = mobile.atc  === 'Found ✅' || mobile.buy  === 'Found ✅';
 
     if (!earlyDesktopFoundButtons && earlyMobileFoundButtons && ['USA', 'Canada', 'Brazil', 'UK', 'Ireland'].includes(tabName)) {
       console.log(`      🔁 Desktop missed buttons but mobile found them — restarting Chrome and retrying desktop once`);
-      console.log(`      🔎 Before rescue: desktop ATC=${desktop.atc} Buy=${desktop.buy} Stock=${desktop.stock} | mobile ATC=${mobile.atc} Buy=${mobile.buy} Stock=${mobile.stock}`);
-
       browser = await launchMarketBrowser();
       checksInThisBrowser = 0;
-
       await sleep(10000);
-
       desktop = await checkPageWithRetry(browser, url, false, marketplace.baseUrl, marketplace.zipCode);
       await sleep(randomDelay());
-
       console.log(`      🔁 Desktop rescue result: ATC=${desktop.atc} Buy=${desktop.buy} Stock=${desktop.stock}`);
     }
 
@@ -899,32 +791,42 @@ async function processTab(sheets, tabName, today, now) {
     let notes       = '';
     let reactivated = false;
 
-    // Mobile is more reliable than desktop — if mobile finds buttons, listing is LIVE
-    const mobileFoundButtons = mobile.atc === 'Found ✅' || mobile.buy === 'Found ✅';
+    const mobileFoundButtons  = mobile.atc  === 'Found ✅' || mobile.buy  === 'Found ✅';
     const desktopFoundButtons = desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅';
 
-    // Determine Buy Box owner to display in column N
     let buyBoxOwner = 'N/A';
-    
+
     if (desktop.isBlocked && !mobileFoundButtons) {
       alert = '⚠️ BLOCKED'; notes = 'Amazon blocked this check'; totalBlocked++;
     } else if (desktop.atc === 'Error' && !mobileFoundButtons) {
       alert = '⚠️ ERROR'; notes = desktop.stock; totalErrors++;
     } else if (desktopFoundButtons || mobileFoundButtons) {
-      // Buttons found - check if Buy Box is ours
+      // ── Listing is live (has buy buttons) ──────────────────────────────────
       const isOurBuyBox = desktop.isOurBuyBox || mobile.isOurBuyBox || false;
-      
-      if (!isOurBuyBox) {
-        alert = '🔴 BUY BOX HIJACKED';
-        notes = 'Buy Box not showing NEW MIUZ';
-        
-        // Try to extract the actual seller name from Buy Box preview
+
+      if (isOurBuyBox) {
+        // ── Buy Box is ours ─────────────────────────────────────────────────
+        buyBoxOwner = 'NEW MIUZ';
+
+        if (suppressed) {
+          // Was CLOSED/OOS/NOT LISTED and is now live with OUR buy box → REACTIVATED alert
+          reactivated = true;
+          alert = '🟢 REACTIVATED';
+          notes = `Was marked ${manualNote.toUpperCase()} but is now LIVE with NEW MIUZ buy box!`;
+        } else {
+          alert = '✅ LIVE';
+          if (!desktopFoundButtons && mobileFoundButtons) {
+            notes = 'Mobile confirmed live (desktop detection issue)';
+          }
+        }
+
+      } else {
+        // ── Buy Box is NOT ours ─────────────────────────────────────────────
+        // Extract hijacker name from preview text
         const preview = desktop.buyBoxPreview || mobile.buyBoxPreview || '';
         if (preview) {
           console.log(`      ⚠️ Buy Box preview: "${preview}"`);
-          
-          // Try to find seller name in preview (works across languages)
-          const soldByMatch = preview.match(/(?:sold by|vendu par|verkauft von|vendido por|venduto da|verkocht door|sprzedawane przez|såld av|vendido por)[:\s]+([^\n\r.]+)/i);
+          const soldByMatch = preview.match(/(?:sold by|vendu par|verkauft von|vendido por|venduto da|verkocht door|sprzedawane przez|såld av)[:\s]+([^\n\r.]+)/i);
           if (soldByMatch) {
             buyBoxOwner = soldByMatch[1].trim().substring(0, 50);
           } else {
@@ -933,21 +835,19 @@ async function processTab(sheets, tabName, today, now) {
         } else {
           buyBoxOwner = 'Hijacked (unknown)';
         }
-      } else {
-        alert = '✅ LIVE';
-        buyBoxOwner = 'NEW MIUZ';
-        
-        // Add note if desktop disagreed with mobile
-        if (!desktopFoundButtons && mobileFoundButtons) {
-          notes = 'Mobile confirmed live (desktop detection issue)';
+
+        if (suppressed) {
+          // CLOSED/OOS/NOT LISTED + hijacked → write to sheet silently, no alert
+          alert = '🔴 BUY BOX HIJACKED';
+          notes = 'Buy Box not showing NEW MIUZ (listing marked ' + manualNote.toUpperCase() + ')';
+          console.log(`      ℹ️ Suppressed hijack — writing to sheet only, no alert`);
+        } else {
+          // Normal (non-suppressed) listing + hijacked → full alert
+          alert = '🔴 BUY BOX HIJACKED';
+          notes = 'Buy Box not showing NEW MIUZ';
         }
       }
-      
-      if (suppressed && isOurBuyBox) {
-        reactivated = true;
-        alert = '🟢 REACTIVATED';
-        notes = `Was marked ${manualNote.toUpperCase()} but is now LIVE!`;
-      }
+
     } else if (desktop.isUnavailable) {
       alert = '🔴 UNAVAILABLE'; notes = desktop.stock || 'Listing unavailable';
     } else {
@@ -960,12 +860,10 @@ async function processTab(sheets, tabName, today, now) {
     const lToM = [desktop.stock, alert];
 
     try {
-      // Small random delay before writing to avoid parallel write conflicts
       await sleep(Math.floor(Math.random() * 500) + 100);
       await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner);
     } catch (err) {
       console.log(`   [${tabName}] ⚠ Sheet write failed for ${asin}: ${err.message}`);
-      // Retry once after a longer delay
       try {
         await sleep(2000);
         await writeOneRow(sheets, tabName, sheetRow, dToJ, lToM, buyBoxOwner);
@@ -976,10 +874,17 @@ async function processTab(sheets, tabName, today, now) {
     }
 
     historyRows.push([today, now, tabName, asin, sku, alert, notes, buyBoxOwner]);
+
+    // ── Summary entry ──────────────────────────────────────────────────────────
+    // suppress = true means: don't include in alert sections
+    // A suppressed+hijacked listing should NOT trigger any alert
+    // A suppressed+reactivated listing SHOULD trigger alert (reactivated=true overrides suppress)
+    const suppressAlert = suppressed && !reactivated;
+
     summary.push({
       marketplace: tabName,
       asin, sku, alert, notes,
-      suppress:    suppressed && !reactivated,
+      suppress:    suppressAlert,
       reactivated,
     });
 
@@ -1042,25 +947,25 @@ async function runSpotCheck(sheets, telegramChatId) {
       const desktop = await checkPageWithRetry(browser, url, false, config.baseUrl, config.zipCode);
       await sleep(randomDelay());
 
-      let status = '';
-      let detail = '';
+      let status          = '';
+      let detail          = '';
       let spotBuyBoxOwner = 'N/A';
 
-      if (desktop.isBlocked)           { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
+      if (desktop.isBlocked)            { status = '⚠️ BLOCKED';     detail = 'CAPTCHA detected'; }
       else if (desktop.atc === 'Error') { status = '⚠️ ERROR';       detail = desktop.stock; }
       else if (desktop.isUnavailable)   { status = '🔴 UNAVAILABLE'; detail = desktop.stock || 'Unavailable'; }
-      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') { 
+      else if (desktop.atc === 'Found ✅' || desktop.buy === 'Found ✅') {
         if (!desktop.isOurBuyBox) {
-          status = '🔴 HIJACKED'; 
-          detail = 'Buy Box not owned by NEW MIUZ';
+          status          = '🔴 HIJACKED';
+          detail          = 'Buy Box not owned by NEW MIUZ';
           spotBuyBoxOwner = 'Hijacked (unknown)';
         } else {
-          status = '✅ LIVE'; 
-          detail = desktop.stock;
+          status          = '✅ LIVE';
+          detail          = desktop.stock;
           spotBuyBoxOwner = 'NEW MIUZ';
         }
       }
-      else                              { status = '🔴 NO BUTTONS';  detail = desktop.stock || 'No buttons found'; }
+      else { status = '🔴 NO BUTTONS'; detail = desktop.stock || 'No buttons found'; }
 
       results.push({ market, identifier, asin, sku, status, detail });
       historyRows.push([today, now, market, asin, sku, status, (detail || '') + ' (spot check)', spotBuyBoxOwner]);
@@ -1086,13 +991,31 @@ async function runSpotCheck(sheets, telegramChatId) {
   console.log(`📱 Spot check results sent to Telegram`);
 }
 
-// ─── FORMAT TELEGRAM SUMMARY (FIXED: NO DUPLICATION) ──────────────────────────
+// ─── FORMAT TELEGRAM SUMMARY ───────────────────────────────────────────────────
+// Alert rules:
+//   - suppressed + hijacked  → suppress=true, reactivated=false → NO alert (silent sheet write only)
+//   - suppressed + live + our buy box → suppress=false, reactivated=true → REACTIVATED alert
+//   - suppressed + live + hijacked → suppress=true → NO alert
+//   - normal + live + our buy box → ✅ LIVE, no alert needed
+//   - normal + live + hijacked → suppress=false → 🚨 HIJACKED alert
+//   - normal + unavailable/no buttons → suppress=false → ⚠️ issues alert
 function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   const duration    = Math.round((Date.now() - startTime) / 60000);
   const reactivated = summary.filter(r => r.reactivated);
-  const hijacked    = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED');
-  // FIX: Exclude hijacked from general issues to prevent duplication
-  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated && r.alert !== '🔴 BUY BOX HIJACKED');
+
+  // Only alert hijacked on non-suppressed listings
+  const hijacked = summary.filter(r =>
+    r.alert === '🔴 BUY BOX HIJACKED' &&
+    !r.suppress
+  );
+
+  // Other issues: not live, not suppressed, not reactivated, not hijacked (already handled above)
+  const issues = summary.filter(r =>
+    r.alert !== '✅ LIVE' &&
+    !r.suppress &&
+    !r.reactivated &&
+    r.alert !== '🔴 BUY BOX HIJACKED'
+  );
 
   let msg = `📊 <b>Amazon Check Complete</b>\n`;
   msg += `${'─'.repeat(30)}\n`;
@@ -1114,7 +1037,7 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   }
 
   if (reactivated.length > 0) {
-    msg += `🚨 <b>URGENT — ${reactivated.length} previously closed listing(s) now LIVE:</b>\n`;
+    msg += `🚨 <b>URGENT — ${reactivated.length} listing(s) now LIVE again:</b>\n`;
     for (const r of reactivated) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
       msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
@@ -1138,15 +1061,26 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   return msg;
 }
 
-// ─── SEND EMAIL SUMMARY (FIXED: NO DUPLICATION) ───────────────────────────────
+// ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
 async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
 
   const duration    = Math.round((Date.now() - startTime) / 60000);
   const reactivated = summary.filter(r => r.reactivated);
-  const hijacked    = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED');
-  // FIX: Exclude hijacked from general issues to prevent duplication
-  const issues      = summary.filter(r => r.alert !== '✅ LIVE' && !r.suppress && !r.reactivated && r.alert !== '🔴 BUY BOX HIJACKED');
+
+  // Only alert hijacked on non-suppressed listings
+  const hijacked = summary.filter(r =>
+    r.alert === '🔴 BUY BOX HIJACKED' &&
+    !r.suppress
+  );
+
+  // Other issues: not live, not suppressed, not reactivated, not hijacked
+  const issues = summary.filter(r =>
+    r.alert !== '✅ LIVE' &&
+    !r.suppress &&
+    !r.reactivated &&
+    r.alert !== '🔴 BUY BOX HIJACKED'
+  );
 
   const makeRows = arr => arr.map(r =>
     `<tr${r.reactivated ? ' style="background:#fff3cd"' : r.alert === '🔴 BUY BOX HIJACKED' ? ' style="background:#ffcccc"' : ''}>
@@ -1179,7 +1113,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       <h3 style="color:#c00;font-family:Arial,sans-serif">🚨 URGENT — Buy Box HIJACKED:</h3>
       <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(hijacked)}</table><br>` : ''}
     ${reactivated.length > 0 ? `
-      <h3 style="color:#856404;font-family:Arial,sans-serif">🚨 URGENT — Previously closed listing(s) now LIVE:</h3>
+      <h3 style="color:#856404;font-family:Arial,sans-serif">🚨 URGENT — Previously offline listing(s) now LIVE:</h3>
       <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(reactivated)}</table><br>` : ''}
     ${issues.length === 0 && reactivated.length === 0 && hijacked.length === 0
       ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>`
@@ -1195,7 +1129,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
   const subject = hasUrgent
     ? hijacked.length > 0
       ? `🚨 URGENT — ${hijacked.length} Buy Box HIJACKED (${muTime()})`
-      : `🚨 URGENT — ${reactivated.length} closed listing(s) now LIVE (${muTime()})`
+      : `🚨 URGENT — ${reactivated.length} listing(s) now LIVE again (${muTime()})`
     : issues.length === 0
       ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
       : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`;
@@ -1215,13 +1149,11 @@ async function main() {
 
   const sheets = await getSheetsClient();
 
-  // ── SPOT CHECK MODE ────────────────────────────────────────────────────────
   if (RUN_MODE === 'spotcheck' && IDENTIFIERS_RAW) {
     await runSpotCheck(sheets, TELEGRAM_CHAT);
     return;
   }
 
-  // ── FULL RUN MODE ──────────────────────────────────────────────────────────
   await applyConditionalFormatting(sheets);
   await ensureHistoryTab(sheets);
 
@@ -1239,7 +1171,6 @@ async function main() {
       ? 'all 16 marketplaces'
       : tabsToRun.join(', ');
 
-  // Send start notification
   await sendTelegram(
     `🚀 <b>Check started!</b>\n\n📦 Running: <i>${scope}</i>\n📌 Triggered from: ${sourceLabel()}\nResults will arrive here + email when done.`
   );
@@ -1247,17 +1178,16 @@ async function main() {
   const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Indian/Mauritius' });
   const now   = new Date().toLocaleTimeString('en-GB', { timeZone: 'Indian/Mauritius' });
 
-  // Split tabs: parallel group, Saudi Arabia, then UAE after Saudi
   const afterSaudiTabs = tabsToRun.filter(t => AFTER_SAUDI.includes(t));
   const parallelTabs   = tabsToRun.filter(t => !AFTER_SAUDI.includes(t));
 
   console.log(`🔁 Running ${parallelTabs.length + afterSaudiTabs.length} tabs sequentially (one at a time)`);
 
-  // Run each tab sequentially — slower but more reliable (no Chrome proxy conflicts)
   const allResults = [];
   for (const t of [...parallelTabs, ...afterSaudiTabs]) {
     allResults.push(await processTab(sheets, t, today, now));
   }
+
   const summary      = allResults.flatMap(r => r.summary);
   const historyRows  = allResults.flatMap(r => r.historyRows);
   const totalChecked = summary.length;
@@ -1274,12 +1204,10 @@ async function main() {
   if (totalErrors  > 0) console.log(`  ❌  ${totalErrors} errors`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  // Send Telegram summary
   console.log('📱 Sending Telegram summary...');
   const telegramMsg = formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
   await sendTelegram(telegramMsg);
 
-  // Send email
   console.log('📧 Sending email summary...');
   await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
 }
