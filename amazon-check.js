@@ -38,10 +38,11 @@ const AFTER_SAUDI = ['UAE'];
 const randomDelay = () => Math.floor(Math.random() * 3000) + 2000;
 
 // ─── SUPPRESSED KEYWORDS (column K) ───────────────────────────────────────────
-// If manual note matches any of these, the listing is "manually suppressed"
-// We still check it and write to sheet, but we DON'T send alerts
-// UNLESS it has come back live with NEW MIUZ owning the buy box (REACTIVATED)
+// All three suppress alerts by default, but OOS is special:
+// OOS + live (any buy box) → alert (REACTIVATED or REACTIVATED BUT HIJACKED)
+// CLOSED / NOT LISTED + live → never alert (intentional, you know about it)
 const isSuppressed = note => /^(closed|oos|not listed)$/i.test((note || '').trim());
+const isOOS        = note => /^oos$/i.test((note || '').trim());
 
 // ─── UNAVAILABLE PHRASES ───────────────────────────────────────────────────────
 const UNAVAILABLE_PHRASES = [
@@ -256,6 +257,7 @@ async function applyConditionalFormatting(sheets) {
       addRequests.push(rule([statusRange], 'BLOCKED',      COLOR.amber));
       addRequests.push(rule([statusRange], 'ERROR',        COLOR.amber));
       addRequests.push(rule([statusRange], 'REACTIVATED',  COLOR.green));
+      addRequests.push(rule([statusRange], 'REACTIVATED BUT HIJACKED', COLOR.amber));
       addRequests.push(rule([buyBoxHistoryRange], 'NEW MIUZ',  COLOR.green));
       addRequests.push(rule([buyBoxHistoryRange], 'Hijacked',  COLOR.red));
     }
@@ -576,9 +578,12 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       await sleep(5000);
       await page.evaluate(() => window.scrollBy(0, 350)).catch(() => {});
       await sleep(2000);
-      // Extra wait specifically for tabular buybox seller info to fully render
-      await page.waitForSelector('#tabular-buybox, #merchant-info, #sellerProfileTriggerId', { timeout: 6000 }).catch(() => {});
-      await sleep(1500);
+    }
+
+    if (!isMobile) {
+      // Wait for tabular buybox seller info to fully render on ALL marketplaces
+      await page.waitForSelector('#tabular-buybox, #merchant-info, #sellerProfileTriggerId, #buybox, #desktop_buybox', { timeout: 6000 }).catch(() => {});
+      await sleep(1000);
     }
 
     const pageTitle   = await page.title().catch(() => '');
@@ -862,11 +867,14 @@ async function processTab(sheets, tabName, today, now) {
         // ── Buy Box is ours ─────────────────────────────────────────────────
         buyBoxOwner = 'NEW MIUZ';
 
-        if (suppressed) {
-          // Was CLOSED/OOS/NOT LISTED and is now live with OUR buy box → REACTIVATED alert
+        if (suppressed && isOOS(manualNote)) {
+          // Was OOS and is now live with OUR buy box → REACTIVATED alert
           reactivated = true;
           alert = '🟢 REACTIVATED';
-          notes = `Was marked ${manualNote.toUpperCase()} but is now LIVE with NEW MIUZ buy box!`;
+          notes = 'Was OOS but is now LIVE with NEW MIUZ buy box!';
+        } else if (suppressed) {
+          // CLOSED or NOT LISTED + live + our buy box → no alert (intentional, you know)
+          alert = '✅ LIVE';
         } else {
           alert = '✅ LIVE';
           if (!desktopFoundButtons && mobileFoundButtons) {
@@ -890,11 +898,17 @@ async function processTab(sheets, tabName, today, now) {
           buyBoxOwner = 'Hijacked (unknown)';
         }
 
-        if (suppressed) {
-          // CLOSED/OOS/NOT LISTED + hijacked → write to sheet silently, no alert
+        if (suppressed && isOOS(manualNote)) {
+          // Was OOS + now live + hijacked → REACTIVATED BUT HIJACKED alert
+          reactivated = true;
+          alert = '🟡 REACTIVATED BUT HIJACKED';
+          notes = 'Was OOS, now LIVE but Buy Box is NOT NEW MIUZ!';
+          console.log(`      ⚠️ OOS listing back live but hijacked — alerting`);
+        } else if (suppressed) {
+          // CLOSED or NOT LISTED + hijacked → write to sheet silently, no alert
           alert = '🔴 BUY BOX HIJACKED';
           notes = 'Buy Box not showing NEW MIUZ (listing marked ' + manualNote.toUpperCase() + ')';
-          console.log(`      ℹ️ Suppressed hijack — writing to sheet only, no alert`);
+          console.log(`      ℹ️ Suppressed hijack (${manualNote}) — writing to sheet only, no alert`);
         } else {
           // Normal (non-suppressed) listing + hijacked → full alert
           alert = '🔴 BUY BOX HIJACKED';
@@ -1054,16 +1068,16 @@ async function runSpotCheck(sheets, telegramChatId) {
 //   - normal + live + hijacked → suppress=false → 🚨 HIJACKED alert
 //   - normal + unavailable/no buttons → suppress=false → ⚠️ issues alert
 function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
-  const duration    = Math.round((Date.now() - startTime) / 60000);
-  const reactivated = summary.filter(r => r.reactivated);
+  const duration = Math.round((Date.now() - startTime) / 60000);
 
-  // Only alert hijacked on non-suppressed listings
-  const hijacked = summary.filter(r =>
-    r.alert === '🔴 BUY BOX HIJACKED' &&
-    !r.suppress
-  );
+  // OOS → back live with our buy box
+  const reactivatedClean = summary.filter(r => r.reactivated && r.alert === '🟢 REACTIVATED');
+  // OOS → back live but hijacked
+  const reactivatedHijacked = summary.filter(r => r.reactivated && r.alert === '🟡 REACTIVATED BUT HIJACKED');
+  // Normal (non-suppressed) listing hijacked
+  const hijacked = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED' && !r.suppress);
 
-  // Other issues: not live, not suppressed, not reactivated, not hijacked (already handled above)
+  // Other issues: unavailable/no buttons/blocked/error on non-suppressed listings
   const issues = summary.filter(r =>
     r.alert !== '✅ LIVE' &&
     !r.suppress &&
@@ -1071,47 +1085,57 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
     r.alert !== '🔴 BUY BOX HIJACKED'
   );
 
-  let msg = `📊 <b>Amazon Check Complete</b>\n`;
-  msg += `${'─'.repeat(30)}\n`;
-  msg += `📦 ${scope}\n`;
-  msg += `✅ ${totalChecked} ASINs checked\n`;
-  msg += `⏱ ${duration} minute(s)\n`;
-  if (totalBlocked > 0) msg += `⚠️ ${totalBlocked} blocked\n`;
-  if (totalErrors  > 0) msg += `❌ ${totalErrors} errors\n`;
+  let msg = \`📊 <b>Amazon Check Complete</b>\n\`;
+  msg += \`\${'─'.repeat(30)}\n\`;
+  msg += \`📦 \${scope}\n\`;
+  msg += \`✅ \${totalChecked} ASINs checked\n\`;
+  msg += \`⏱ \${duration} minute(s)\n\`;
+  if (totalBlocked > 0) msg += \`⚠️ \${totalBlocked} blocked\n\`;
+  if (totalErrors  > 0) msg += \`❌ \${totalErrors} errors\n\`;
   msg += '\n';
 
   if (hijacked.length > 0) {
-    msg += `🚨 <b>URGENT — ${hijacked.length} Buy Box HIJACKED:</b>\n`;
+    msg += \`🚨 <b>URGENT — \${hijacked.length} Buy Box HIJACKED:</b>\n\`;
     for (const r of hijacked) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
-      msg += `  <i>${r.notes}</i>\n`;
+      msg += \`  \${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
+      msg += \`  <i>\${r.notes}</i>\n\`;
     }
     msg += '\n';
   }
 
-  if (reactivated.length > 0) {
-    msg += `🚨 <b>URGENT — ${reactivated.length} listing(s) now LIVE again:</b>\n`;
-    for (const r of reactivated) {
+  if (reactivatedHijacked.length > 0) {
+    msg += \`🚨 <b>URGENT — \${reactivatedHijacked.length} OOS listing(s) back LIVE but HIJACKED:</b>\n\`;
+    for (const r of reactivatedHijacked) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
-      msg += `  <i>${r.notes}</i>\n`;
+      msg += \`  \${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
+      msg += \`  <i>\${r.notes}</i>\n\`;
     }
     msg += '\n';
   }
 
-  if (issues.length === 0 && reactivated.length === 0 && hijacked.length === 0) {
-    msg += `✅ All active listings are LIVE with correct Buy Box — no issues!`;
+  if (reactivatedClean.length > 0) {
+    msg += \`🟢 <b>\${reactivatedClean.length} OOS listing(s) back LIVE with NEW MIUZ buy box:</b>\n\`;
+    for (const r of reactivatedClean) {
+      const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
+      msg += \`  \${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
+      msg += \`  <i>\${r.notes}</i>\n\`;
+    }
+    msg += '\n';
+  }
+
+  if (issues.length === 0 && reactivatedClean.length === 0 && reactivatedHijacked.length === 0 && hijacked.length === 0) {
+    msg += \`✅ All active listings are LIVE with correct Buy Box — no issues!\`;
   } else if (issues.length > 0) {
-    msg += `⚠️ <b>${issues.length} other issue(s) need attention:</b>\n`;
+    msg += \`⚠️ <b>\${issues.length} other issue(s) need attention:</b>\n\`;
     for (const r of issues) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += `\n${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
-      msg += `  ${r.alert}${r.notes ? ' — ' + r.notes : ''}\n`;
+      msg += \`\n\${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
+      msg += \`  \${r.alert}\${r.notes ? ' — ' + r.notes : ''}\n\`;
     }
   }
 
-  msg += `\n\n<a href="${SHEET_URL}">📊 Open Google Sheet</a>`;
+  msg += \`\n\n<a href="\${SHEET_URL}">📊 Open Google Sheet</a>\`;
   return msg;
 }
 
@@ -1119,16 +1143,19 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
 async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
 
-  const duration    = Math.round((Date.now() - startTime) / 60000);
-  const reactivated = summary.filter(r => r.reactivated);
+  const duration = Math.round((Date.now() - startTime) / 60000);
 
-  // Only alert hijacked on non-suppressed listings
+  // OOS → back live with our buy box
+  const reactivatedClean    = summary.filter(r => r.reactivated && r.alert === '🟢 REACTIVATED');
+  // OOS → back live but hijacked
+  const reactivatedHijacked = summary.filter(r => r.reactivated && r.alert === '🟡 REACTIVATED BUT HIJACKED');
+  // Normal (non-suppressed) listing hijacked
   const hijacked = summary.filter(r =>
     r.alert === '🔴 BUY BOX HIJACKED' &&
     !r.suppress
   );
 
-  // Other issues: not live, not suppressed, not reactivated, not hijacked
+  // Other issues: unavailable/no buttons/blocked/error on non-suppressed listings
   const issues = summary.filter(r =>
     r.alert !== '✅ LIVE' &&
     !r.suppress &&
@@ -1136,61 +1163,67 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     r.alert !== '🔴 BUY BOX HIJACKED'
   );
 
-  const makeRows = arr => arr.map(r =>
-    `<tr${r.reactivated ? ' style="background:#fff3cd"' : r.alert === '🔴 BUY BOX HIJACKED' ? ' style="background:#ffcccc"' : ''}>
-      <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">${r.asin}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">${r.sku}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">${r.alert}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">${r.notes || ''}</td>
-    </tr>`
+  const makeRows = (arr, bgColor) => arr.map(r =>
+    \`<tr style="background:\${bgColor}">
+      <td style="padding:4px 8px;border:1px solid #ddd">\${r.marketplace}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">\${r.asin}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">\${r.sku}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">\${r.alert}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">\${r.notes || ''}</td>
+    </tr>\`
   ).join('');
 
-  const tableHeader = `<tr style="background:#f0f0f0">
+  const tableHeader = \`<tr style="background:#f0f0f0">
     <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
     <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
     <th style="padding:4px 8px;border:1px solid #ddd">SKU</th>
     <th style="padding:4px 8px;border:1px solid #ddd">Status</th>
     <th style="padding:4px 8px;border:1px solid #ddd">Notes</th>
-  </tr>`;
+  </tr>\`;
 
-  const html = `
-    <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — ${muTime()}</h2>
+  const hasUrgent = hijacked.length > 0 || reactivatedHijacked.length > 0 || reactivatedClean.length > 0;
+
+  const html = \`
+    <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — \${muTime()}</h2>
     <p style="font-family:Arial,sans-serif">
-      📦 <strong>${scope}</strong><br>
-      ✅ <strong>${totalChecked}</strong> ASINs checked<br>
-      ⏱ Completed in <strong>${duration} minutes</strong><br>
-      ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked<br>` : ''}
-      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>` : ''}
+      📦 <strong>\${scope}</strong><br>
+      ✅ <strong>\${totalChecked}</strong> ASINs checked<br>
+      ⏱ Completed in <strong>\${duration} minutes</strong><br>
+      \${totalBlocked > 0 ? \`⚠️ <strong>\${totalBlocked}</strong> blocked<br>\` : ''}
+      \${totalErrors  > 0 ? \`❌ <strong>\${totalErrors}</strong> errors<br>\` : ''}
     </p>
-    ${hijacked.length > 0 ? `
+    \${hijacked.length > 0 ? \`
       <h3 style="color:#c00;font-family:Arial,sans-serif">🚨 URGENT — Buy Box HIJACKED:</h3>
-      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(hijacked)}</table><br>` : ''}
-    ${reactivated.length > 0 ? `
-      <h3 style="color:#856404;font-family:Arial,sans-serif">🚨 URGENT — Previously offline listing(s) now LIVE:</h3>
-      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(reactivated)}</table><br>` : ''}
-    ${issues.length === 0 && reactivated.length === 0 && hijacked.length === 0
-      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>`
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(hijacked, '#ffcccc')}</table><br>\` : ''}
+    \${reactivatedHijacked.length > 0 ? \`
+      <h3 style="color:#c00;font-family:Arial,sans-serif">🚨 URGENT — OOS listing(s) back LIVE but HIJACKED:</h3>
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(reactivatedHijacked, '#ffe0b2')}</table><br>\` : ''}
+    \${reactivatedClean.length > 0 ? \`
+      <h3 style="color:#2e7d32;font-family:Arial,sans-serif">🟢 OOS listing(s) back LIVE with NEW MIUZ buy box:</h3>
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(reactivatedClean, '#e8f5e9')}</table><br>\` : ''}
+    \${issues.length === 0 && !hasUrgent
+      ? \`<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>\`
       : issues.length > 0
-        ? `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} other issue(s):</h3>
-           <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(issues)}</table>` : ''
+        ? \`<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ \${issues.length} other issue(s):</h3>
+           <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(issues, '#fff9c4')}</table>\` : ''
     }
     <p style="margin-top:24px;font-family:Arial,sans-serif">
-      <a href="${SHEET_URL}" style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Open Google Sheet</a>
-    </p>`;
+      <a href="\${SHEET_URL}" style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Open Google Sheet</a>
+    </p>\`;
 
-  const hasUrgent = reactivated.length > 0 || hijacked.length > 0;
-  const subject = hasUrgent
-    ? hijacked.length > 0
-      ? `🚨 URGENT — ${hijacked.length} Buy Box HIJACKED (${muTime()})`
-      : `🚨 URGENT — ${reactivated.length} listing(s) now LIVE again (${muTime()})`
-    : issues.length === 0
-      ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
-      : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`;
+  const subject = hijacked.length > 0
+    ? \`🚨 URGENT — \${hijacked.length} Buy Box HIJACKED (\${muTime()})\`
+    : reactivatedHijacked.length > 0
+      ? \`🚨 URGENT — \${reactivatedHijacked.length} OOS listing(s) back LIVE but HIJACKED (\${muTime()})\`
+      : reactivatedClean.length > 0
+        ? \`🟢 \${reactivatedClean.length} OOS listing(s) back LIVE with your buy box (\${muTime()})\`
+        : issues.length === 0
+          ? \`✅ Amazon Check Done — All \${totalChecked} listings LIVE (\${muTime()})\`
+          : \`⚠️ Amazon Check — \${issues.length} issue(s) found (\${muTime()})\`;
 
   const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
-  await transporter.sendMail({ from: `Amazon Checker <${GMAIL_USER}>`, to: GMAIL_USER, subject, html });
-  console.log(`   📧 Email sent`);
+  await transporter.sendMail({ from: \`Amazon Checker <\${GMAIL_USER}>\`, to: GMAIL_USER, subject, html });
+  console.log(\`   📧 Email sent\`);
 }
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────────
