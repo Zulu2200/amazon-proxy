@@ -1085,57 +1085,57 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
     r.alert !== '🔴 BUY BOX HIJACKED'
   );
 
-  let msg = \`📊 <b>Amazon Check Complete</b>\n\`;
-  msg += \`\${'─'.repeat(30)}\n\`;
-  msg += \`📦 \${scope}\n\`;
-  msg += \`✅ \${totalChecked} ASINs checked\n\`;
-  msg += \`⏱ \${duration} minute(s)\n\`;
-  if (totalBlocked > 0) msg += \`⚠️ \${totalBlocked} blocked\n\`;
-  if (totalErrors  > 0) msg += \`❌ \${totalErrors} errors\n\`;
+  let msg = `📊 <b>Amazon Check Complete</b>\n`;
+  msg += `${'─'.repeat(30)}\n`;
+  msg += `📦 ${scope}\n`;
+  msg += `✅ ${totalChecked} ASINs checked\n`;
+  msg += `⏱ ${duration} minute(s)\n`;
+  if (totalBlocked > 0) msg += `⚠️ ${totalBlocked} blocked\n`;
+  if (totalErrors  > 0) msg += `❌ ${totalErrors} errors\n`;
   msg += '\n';
 
   if (hijacked.length > 0) {
-    msg += \`🚨 <b>URGENT — \${hijacked.length} Buy Box HIJACKED:</b>\n\`;
+    msg += `🚨 <b>URGENT — ${hijacked.length} Buy Box HIJACKED:</b>\n`;
     for (const r of hijacked) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += \`  \${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
-      msg += \`  <i>\${r.notes}</i>\n\`;
+      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  <i>${r.notes}</i>\n`;
     }
     msg += '\n';
   }
 
   if (reactivatedHijacked.length > 0) {
-    msg += \`🚨 <b>URGENT — \${reactivatedHijacked.length} OOS listing(s) back LIVE but HIJACKED:</b>\n\`;
+    msg += `🚨 <b>URGENT — ${reactivatedHijacked.length} OOS listing(s) back LIVE but HIJACKED:</b>\n`;
     for (const r of reactivatedHijacked) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += \`  \${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
-      msg += \`  <i>\${r.notes}</i>\n\`;
+      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  <i>${r.notes}</i>\n`;
     }
     msg += '\n';
   }
 
   if (reactivatedClean.length > 0) {
-    msg += \`🟢 <b>\${reactivatedClean.length} OOS listing(s) back LIVE with NEW MIUZ buy box:</b>\n\`;
+    msg += `🟢 <b>${reactivatedClean.length} OOS listing(s) back LIVE with NEW MIUZ buy box:</b>\n`;
     for (const r of reactivatedClean) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += \`  \${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
-      msg += \`  <i>\${r.notes}</i>\n\`;
+      msg += `  ${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  <i>${r.notes}</i>\n`;
     }
     msg += '\n';
   }
 
   if (issues.length === 0 && reactivatedClean.length === 0 && reactivatedHijacked.length === 0 && hijacked.length === 0) {
-    msg += \`✅ All active listings are LIVE with correct Buy Box — no issues!\`;
+    msg += `✅ All active listings are LIVE with correct Buy Box — no issues!`;
   } else if (issues.length > 0) {
-    msg += \`⚠️ <b>\${issues.length} other issue(s) need attention:</b>\n\`;
+    msg += `⚠️ <b>${issues.length} other issue(s) need attention:</b>\n`;
     for (const r of issues) {
       const flag = MARKETPLACES[r.marketplace]?.flag || '🌐';
-      msg += \`\n\${flag} \${r.marketplace} | \${r.asin} | \${r.sku}\n\`;
-      msg += \`  \${r.alert}\${r.notes ? ' — ' + r.notes : ''}\n\`;
+      msg += `\n${flag} ${r.marketplace} | ${r.asin} | ${r.sku}\n`;
+      msg += `  ${r.alert}${r.notes ? ' — ' + r.notes : ''}\n`;
     }
   }
 
-  msg += \`\n\n<a href="\${SHEET_URL}">📊 Open Google Sheet</a>\`;
+  msg += `\n\n<a href="${SHEET_URL}">📊 Open Google Sheet</a>`;
   return msg;
 }
 
@@ -1164,66 +1164,66 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
   );
 
   const makeRows = (arr, bgColor) => arr.map(r =>
-    \`<tr style="background:\${bgColor}">
-      <td style="padding:4px 8px;border:1px solid #ddd">\${r.marketplace}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">\${r.asin}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">\${r.sku}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">\${r.alert}</td>
-      <td style="padding:4px 8px;border:1px solid #ddd">\${r.notes || ''}</td>
-    </tr>\`
+    `<tr style="background:${bgColor}">
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.marketplace}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.asin}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.sku}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.alert}</td>
+      <td style="padding:4px 8px;border:1px solid #ddd">${r.notes || ''}</td>
+    </tr>`
   ).join('');
 
-  const tableHeader = \`<tr style="background:#f0f0f0">
+  const tableHeader = `<tr style="background:#f0f0f0">
     <th style="padding:4px 8px;border:1px solid #ddd">Marketplace</th>
     <th style="padding:4px 8px;border:1px solid #ddd">ASIN</th>
     <th style="padding:4px 8px;border:1px solid #ddd">SKU</th>
     <th style="padding:4px 8px;border:1px solid #ddd">Status</th>
     <th style="padding:4px 8px;border:1px solid #ddd">Notes</th>
-  </tr>\`;
+  </tr>`;
 
   const hasUrgent = hijacked.length > 0 || reactivatedHijacked.length > 0 || reactivatedClean.length > 0;
 
-  const html = \`
-    <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — \${muTime()}</h2>
+  const html = `
+    <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — ${muTime()}</h2>
     <p style="font-family:Arial,sans-serif">
-      📦 <strong>\${scope}</strong><br>
-      ✅ <strong>\${totalChecked}</strong> ASINs checked<br>
-      ⏱ Completed in <strong>\${duration} minutes</strong><br>
-      \${totalBlocked > 0 ? \`⚠️ <strong>\${totalBlocked}</strong> blocked<br>\` : ''}
-      \${totalErrors  > 0 ? \`❌ <strong>\${totalErrors}</strong> errors<br>\` : ''}
+      📦 <strong>${scope}</strong><br>
+      ✅ <strong>${totalChecked}</strong> ASINs checked<br>
+      ⏱ Completed in <strong>${duration} minutes</strong><br>
+      ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked<br>` : ''}
+      ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>` : ''}
     </p>
-    \${hijacked.length > 0 ? \`
+    ${hijacked.length > 0 ? `
       <h3 style="color:#c00;font-family:Arial,sans-serif">🚨 URGENT — Buy Box HIJACKED:</h3>
-      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(hijacked, '#ffcccc')}</table><br>\` : ''}
-    \${reactivatedHijacked.length > 0 ? \`
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(hijacked, '#ffcccc')}</table><br>` : ''}
+    ${reactivatedHijacked.length > 0 ? `
       <h3 style="color:#c00;font-family:Arial,sans-serif">🚨 URGENT — OOS listing(s) back LIVE but HIJACKED:</h3>
-      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(reactivatedHijacked, '#ffe0b2')}</table><br>\` : ''}
-    \${reactivatedClean.length > 0 ? \`
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(reactivatedHijacked, '#ffe0b2')}</table><br>` : ''}
+    ${reactivatedClean.length > 0 ? `
       <h3 style="color:#2e7d32;font-family:Arial,sans-serif">🟢 OOS listing(s) back LIVE with NEW MIUZ buy box:</h3>
-      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(reactivatedClean, '#e8f5e9')}</table><br>\` : ''}
-    \${issues.length === 0 && !hasUrgent
-      ? \`<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>\`
+      <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(reactivatedClean, '#e8f5e9')}</table><br>` : ''}
+    ${issues.length === 0 && !hasUrgent
+      ? `<p style="color:green;font-weight:bold;font-family:Arial,sans-serif">✅ All active listings LIVE with correct Buy Box — no issues!</p>`
       : issues.length > 0
-        ? \`<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ \${issues.length} other issue(s):</h3>
-           <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">\${tableHeader}\${makeRows(issues, '#fff9c4')}</table>\` : ''
+        ? `<h3 style="color:#c00;font-family:Arial,sans-serif">⚠️ ${issues.length} other issue(s):</h3>
+           <table style="border-collapse:collapse;font-size:13px;font-family:Arial,sans-serif">${tableHeader}${makeRows(issues, '#fff9c4')}</table>` : ''
     }
     <p style="margin-top:24px;font-family:Arial,sans-serif">
-      <a href="\${SHEET_URL}" style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Open Google Sheet</a>
-    </p>\`;
+      <a href="${SHEET_URL}" style="background:#4285f4;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Open Google Sheet</a>
+    </p>`;
 
   const subject = hijacked.length > 0
-    ? \`🚨 URGENT — \${hijacked.length} Buy Box HIJACKED (\${muTime()})\`
+    ? `🚨 URGENT — ${hijacked.length} Buy Box HIJACKED (${muTime()})`
     : reactivatedHijacked.length > 0
-      ? \`🚨 URGENT — \${reactivatedHijacked.length} OOS listing(s) back LIVE but HIJACKED (\${muTime()})\`
+      ? `🚨 URGENT — ${reactivatedHijacked.length} OOS listing(s) back LIVE but HIJACKED (${muTime()})`
       : reactivatedClean.length > 0
-        ? \`🟢 \${reactivatedClean.length} OOS listing(s) back LIVE with your buy box (\${muTime()})\`
+        ? `🟢 ${reactivatedClean.length} OOS listing(s) back LIVE with your buy box (${muTime()})`
         : issues.length === 0
-          ? \`✅ Amazon Check Done — All \${totalChecked} listings LIVE (\${muTime()})\`
-          : \`⚠️ Amazon Check — \${issues.length} issue(s) found (\${muTime()})\`;
+          ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
+          : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`;
 
   const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
-  await transporter.sendMail({ from: \`Amazon Checker <\${GMAIL_USER}>\`, to: GMAIL_USER, subject, html });
-  console.log(\`   📧 Email sent\`);
+  await transporter.sendMail({ from: `Amazon Checker <${GMAIL_USER}>`, to: GMAIL_USER, subject, html });
+  console.log(`   📧 Email sent`);
 }
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────────
