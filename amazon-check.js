@@ -576,6 +576,9 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       await sleep(5000);
       await page.evaluate(() => window.scrollBy(0, 350)).catch(() => {});
       await sleep(2000);
+      // Extra wait specifically for tabular buybox seller info to fully render
+      await page.waitForSelector('#tabular-buybox, #merchant-info, #sellerProfileTriggerId', { timeout: 6000 }).catch(() => {});
+      await sleep(1500);
     }
 
     const pageTitle   = await page.title().catch(() => '');
@@ -640,19 +643,27 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
           '#merchant-info',
           '#sellerProfileTriggerId',
           '#tabular-buybox-truncate-0',
+          '#tabular-buybox-truncate-1',
           '#tabular-buybox',
           '#soldByThirdParty',
           '#availability',
           '#buybox',
           '#desktop_buybox',
           '#apex_desktop',
+          // Tabular buybox rows (Canada/USA "Ships from / Sold by" layout)
+          '#tabular-buybox .tabular-buybox-text',
+          '#buybox-tabular',
+          '[id^="tabular-buybox"]',
         ];
 
         let foundText = '';
         for (const selector of buyBoxSelectors) {
-          const el = document.querySelector(selector);
-          if (el) {
-            foundText += ' ' + (el.innerText || el.textContent || '');
+          // querySelectorAll for wildcard selectors, querySelector for specific ones
+          const els = selector.includes('^=')
+            ? Array.from(document.querySelectorAll(selector))
+            : [document.querySelector(selector)].filter(Boolean);
+          for (const el of els) {
+            if (el) foundText += ' ' + (el.innerText || el.textContent || '');
           }
         }
 
@@ -661,10 +672,16 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
           foundText += ' ' + (rightCol.innerText || rightCol.textContent || '');
         }
 
+        // Also scan all anchor tags in the buybox area for seller name links
+        const sellerLinks = document.querySelectorAll('#merchant-info a, #tabular-buybox a, #buybox a, #desktop_buybox a, #rightCol a');
+        for (const a of sellerLinks) {
+          foundText += ' ' + (a.innerText || a.textContent || '');
+        }
+
         foundText = foundText.replace(/\s+/g, ' ').trim();
 
         const hasOurName   = foundText.toLowerCase().includes(expectedSeller.toLowerCase());
-        const buyBoxPreview = foundText.substring(0, 200);
+        const buyBoxPreview = foundText.substring(0, 500);
 
         return {
           hasOurName,
