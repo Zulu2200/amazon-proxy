@@ -952,6 +952,7 @@ async function processTab(sheets, tabName, today, now) {
     summary.push({
       marketplace: tabName,
       asin, sku, alert, notes,
+      manualNote,
       suppress:    suppressAlert,
       reactivated,
     });
@@ -1067,7 +1068,7 @@ async function runSpotCheck(sheets, telegramChatId) {
 //   - normal + live + our buy box → ✅ LIVE, no alert needed
 //   - normal + live + hijacked → suppress=false → 🚨 HIJACKED alert
 //   - normal + unavailable/no buttons → suppress=false → ⚠️ issues alert
-function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
+function formatTelegramSummary(summary, totalChecked, totalActive, totalBlocked, totalErrors, startTime, scope) {
   const duration = Math.round((Date.now() - startTime) / 60000);
 
   // OOS → back live with our buy box
@@ -1088,7 +1089,7 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   let msg = `📊 <b>Amazon Check Complete</b>\n`;
   msg += `${'─'.repeat(30)}\n`;
   msg += `📦 ${scope}\n`;
-  msg += `✅ ${totalChecked} ASINs checked\n`;
+  msg += `✅ ${totalActive} active ASINs checked\n`;
   msg += `⏱ ${duration} minute(s)\n`;
   if (totalBlocked > 0) msg += `⚠️ ${totalBlocked} blocked\n`;
   if (totalErrors  > 0) msg += `❌ ${totalErrors} errors\n`;
@@ -1125,7 +1126,7 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
   }
 
   if (issues.length === 0 && reactivatedClean.length === 0 && reactivatedHijacked.length === 0 && hijacked.length === 0) {
-    msg += `✅ All active listings are LIVE with correct Buy Box — no issues!`;
+    msg += `✅ All ${totalActive} active listings are LIVE with correct Buy Box — no issues!`;
   } else if (issues.length > 0) {
     msg += `⚠️ <b>${issues.length} other issue(s) need attention:</b>\n`;
     for (const r of issues) {
@@ -1140,7 +1141,7 @@ function formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors,
 }
 
 // ─── SEND EMAIL SUMMARY ────────────────────────────────────────────────────────
-async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope) {
+async function sendEmailSummary(summary, totalChecked, totalActive, totalBlocked, totalErrors, startTime, scope) {
   if (!GMAIL_USER || !GMAIL_PASS) return;
 
   const duration = Math.round((Date.now() - startTime) / 60000);
@@ -1187,7 +1188,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
     <h2 style="color:#333;font-family:Arial,sans-serif">Amazon Listing Check — ${muTime()}</h2>
     <p style="font-family:Arial,sans-serif">
       📦 <strong>${scope}</strong><br>
-      ✅ <strong>${totalChecked}</strong> ASINs checked<br>
+      ✅ <strong>${totalActive}</strong> active ASINs checked<br>
       ⏱ Completed in <strong>${duration} minutes</strong><br>
       ${totalBlocked > 0 ? `⚠️ <strong>${totalBlocked}</strong> blocked<br>` : ''}
       ${totalErrors  > 0 ? `❌ <strong>${totalErrors}</strong> errors<br>` : ''}
@@ -1218,7 +1219,7 @@ async function sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors
       : reactivatedClean.length > 0
         ? `🟢 ${reactivatedClean.length} OOS listing(s) back LIVE with your buy box (${muTime()})`
         : issues.length === 0
-          ? `✅ Amazon Check Done — All ${totalChecked} listings LIVE (${muTime()})`
+          ? `✅ Amazon Check Done — All ${totalActive} active listings LIVE (${muTime()})`
           : `⚠️ Amazon Check — ${issues.length} issue(s) found (${muTime()})`;
 
   const transporter = nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_PASS } });
@@ -1278,6 +1279,8 @@ async function main() {
   const summary      = allResults.flatMap(r => r.summary);
   const historyRows  = allResults.flatMap(r => r.historyRows);
   const totalChecked = summary.length;
+  // Active = excludes CLOSED and NOT LISTED (intentionally suppressed, not OOS)
+  const totalActive  = summary.filter(r => !/^(closed|not listed)$/i.test((r.manualNote || '').trim())).length;
   const totalBlocked = allResults.reduce((n, r) => n + r.totalBlocked, 0);
   const totalErrors  = allResults.reduce((n, r) => n + r.totalErrors,  0);
 
@@ -1292,11 +1295,11 @@ async function main() {
   console.log(`${'═'.repeat(60)}\n`);
 
   console.log('📱 Sending Telegram summary...');
-  const telegramMsg = formatTelegramSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
+  const telegramMsg = formatTelegramSummary(summary, totalChecked, totalActive, totalBlocked, totalErrors, startTime, scope);
   await sendTelegram(telegramMsg);
 
   console.log('📧 Sending email summary...');
-  await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
+  await sendEmailSummary(summary, totalChecked, totalActive, totalBlocked, totalErrors, startTime, scope);
 }
 
 // ─── SIGTERM / SIGINT HANDLER — fires when run is cancelled from anywhere ───────
