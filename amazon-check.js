@@ -1299,14 +1299,30 @@ async function main() {
   await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
 }
 
-// ─── SIGTERM HANDLER — fires when GitHub Actions or Sheet cancels the run ──────
-process.on('SIGTERM', async () => {
-  console.log('\n⚠️ SIGTERM received — run was cancelled');
+// ─── SIGTERM / SIGINT HANDLER — fires when run is cancelled from anywhere ───────
+// GitHub Actions sends SIGTERM then SIGKILL after ~5s — we must finish quickly
+async function sendStopNotification() {
+  const msg = '🔴 <b>Check stopped</b>\n\n❌ Run was cancelled';
+  console.log('\n⚠️ Run cancelled — sending Telegram notification...');
   try {
-    await sendTelegram('🔴 <b>Check stopped</b>\n\n❌ Run was cancelled');
+    // Race against a 4 second timeout to ensure we finish before SIGKILL
+    await Promise.race([
+      sendTelegram(msg),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
+    ]);
+    console.log('✅ Stop notification sent');
   } catch (e) {
-    console.log('Could not send stop notification:', e.message);
+    console.log('⚠️ Stop notification failed:', e.message);
   }
+}
+
+process.on('SIGTERM', async () => {
+  await sendStopNotification();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  await sendStopNotification();
   process.exit(0);
 });
 
