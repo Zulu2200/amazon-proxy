@@ -1299,6 +1299,17 @@ async function main() {
   await sendEmailSummary(summary, totalChecked, totalBlocked, totalErrors, startTime, scope);
 }
 
+// ─── SIGTERM HANDLER — fires when GitHub Actions or Sheet cancels the run ──────
+process.on('SIGTERM', async () => {
+  console.log('\n⚠️ SIGTERM received — run was cancelled');
+  try {
+    await sendTelegram('🔴 <b>Check stopped</b>\n\n❌ Run was cancelled');
+  } catch (e) {
+    console.log('Could not send stop notification:', e.message);
+  }
+  process.exit(0);
+});
+
 main().catch(err => {
   console.error('\n❌ Fatal error:', err);
   process.exit(1);
