@@ -69,7 +69,7 @@ const MARKETPLACES = {
   'Belgium':      { baseUrl: 'https://www.amazon.com.be', flag: '🇧🇪', proxy: '46.203.144.45:7812', zipCode: '1000'    },
   'Netherlands':  { baseUrl: 'https://www.amazon.nl',     flag: '🇳🇱', proxy: '104.253.199.5:5284'  },
   'Spain':        { baseUrl: 'https://www.amazon.es',     flag: '🇪🇸', proxy: '46.203.60.158:7158', zipCode: '28001'   },
- 'Italy': { baseUrl: 'https://www.amazon.it', flag: '🇮🇹', proxy: '82.24.27.117:8089', zipCode: '20121' },
+  'Italy':        { baseUrl: 'https://www.amazon.it',     flag: '🇮🇹', proxy: '82.24.27.117:8089',  zipCode: '20121'   },
   'Sweden':       { baseUrl: 'https://www.amazon.se',     flag: '🇸🇪', proxy: '82.26.114.47:6749'   },
   'Poland':       { baseUrl: 'https://www.amazon.pl',     flag: '🇵🇱', proxy: '82.29.47.131:7855'   },
   'Brazil':       { baseUrl: 'https://www.amazon.com.br', flag: '🇧🇷', proxy: '192.53.142.66:5763'  },
@@ -428,7 +428,6 @@ async function getAllASINsFromSheet(sheets, tabNames) {
 }
 
 // ─── WRITE ONE ROW (INCLUDES COLUMN N FOR BUY BOX OWNER) ──────────────────────
-//                  if false, clears colour on D/E/F/G back to white
 async function writeOneRow(sheets, tabName, sheetId, sheetRow, dToJ, lToM, buyBoxOwner) {
   // 1. Write values
   await sheets.spreadsheets.values.batchUpdate({
@@ -548,24 +547,39 @@ async function checkPage(browser, url, isMobile, baseUrl, zipCode) {
       'Accept-Encoding': 'gzip, deflate, br',
     });
 
+    // ─── DEBUG: ZIP CODE BLOCK — logs result instead of swallowing silently ───
     if (zipCode && !isMobile) {
       try {
         await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await page.evaluate(async (baseUrl, zipCode) => {
-          await fetch(`${baseUrl}/portal-migration/hz/glow/address-change`, {
+        const addrResult = await page.evaluate(async (baseUrl, zipCode) => {
+          const res = await fetch(`${baseUrl}/portal-migration/hz/glow/address-change`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({ locationType: 'LOCATION_INPUT', zipCode, storeContext: 'generic', deviceType: 'web', pageType: 'Gateway', actionSource: 'glow' }),
             credentials: 'include',
           });
+          const text = await res.text();
+          return { status: res.status, body: text.substring(0, 200) };
         }, baseUrl, zipCode);
+        console.log(`      📍 Address change [${zipCode}]: status=${addrResult.status} body=${addrResult.body}`);
         await sleep(1500);
-      } catch (e) {}
+      } catch (e) {
+        console.log(`      ❌ Address change error: ${e.message}`);
+      }
     }
 
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     await handleContinueShopping(page, url, `${baseUrl} ${isMobile ? 'mobile' : 'desktop'}`);
+
+    // ─── DEBUG: LOG PAGE TEXT + SCREENSHOT ────────────────────────────────────
+    const asinId = url.split('/dp/')[1]?.split('/')[0] || 'unknown';
+    const debugBody = await page.evaluate(() =>
+      document.body ? document.body.innerText.substring(0, 800) : ''
+    ).catch(() => '');
+    console.log(`      🔍 PAGE TEXT [${asinId}] [${isMobile ? 'mobile' : 'desktop'}]: ${debugBody.replace(/\n/g, ' ').substring(0, 500)}`);
+    await page.screenshot({ path: `/tmp/debug-${asinId}-${isMobile ? 'mobile' : 'desktop'}.png` }).catch(() => {});
+    // ─── END DEBUG ─────────────────────────────────────────────────────────────
 
     const isCanadaDesktop = baseUrl.includes('amazon.ca') && !isMobile;
     const waitSelector = isCanadaDesktop
@@ -944,9 +958,6 @@ async function processTab(sheets, tabName, today, now) {
     historyRows.push([today, now, tabName, asin, sku, alert, notes, buyBoxOwner]);
 
     // ── Summary entry ──────────────────────────────────────────────────────────
-    // suppress = true means: don't include in alert sections
-    // A suppressed+hijacked listing should NOT trigger any alert
-    // A suppressed+reactivated listing SHOULD trigger alert (reactivated=true overrides suppress)
     const suppressAlert = suppressed && !reactivated;
 
     summary.push({
@@ -1061,25 +1072,13 @@ async function runSpotCheck(sheets, telegramChatId) {
 }
 
 // ─── FORMAT TELEGRAM SUMMARY ───────────────────────────────────────────────────
-// Alert rules:
-//   - suppressed + hijacked  → suppress=true, reactivated=false → NO alert (silent sheet write only)
-//   - suppressed + live + our buy box → suppress=false, reactivated=true → REACTIVATED alert
-//   - suppressed + live + hijacked → suppress=true → NO alert
-//   - normal + live + our buy box → ✅ LIVE, no alert needed
-//   - normal + live + hijacked → suppress=false → 🚨 HIJACKED alert
-//   - normal + unavailable/no buttons → suppress=false → ⚠️ issues alert
 function formatTelegramSummary(summary, totalChecked, totalActive, totalBlocked, totalErrors, startTime, scope) {
   const duration = Math.round((Date.now() - startTime) / 60000);
 
-  // OOS → back live with our buy box
-  const reactivatedClean = summary.filter(r => r.reactivated && r.alert === '🟢 REACTIVATED');
-  // OOS → back live but hijacked
+  const reactivatedClean    = summary.filter(r => r.reactivated && r.alert === '🟢 REACTIVATED');
   const reactivatedHijacked = summary.filter(r => r.reactivated && r.alert === '🟡 REACTIVATED BUT HIJACKED');
-  // Normal (non-suppressed) listing hijacked
-  const hijacked = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED' && !r.suppress);
-
-  // Other issues: unavailable/no buttons/blocked/error on non-suppressed listings
-  const issues = summary.filter(r =>
+  const hijacked            = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED' && !r.suppress);
+  const issues              = summary.filter(r =>
     r.alert !== '✅ LIVE' &&
     !r.suppress &&
     !r.reactivated &&
@@ -1146,18 +1145,10 @@ async function sendEmailSummary(summary, totalChecked, totalActive, totalBlocked
 
   const duration = Math.round((Date.now() - startTime) / 60000);
 
-  // OOS → back live with our buy box
   const reactivatedClean    = summary.filter(r => r.reactivated && r.alert === '🟢 REACTIVATED');
-  // OOS → back live but hijacked
   const reactivatedHijacked = summary.filter(r => r.reactivated && r.alert === '🟡 REACTIVATED BUT HIJACKED');
-  // Normal (non-suppressed) listing hijacked
-  const hijacked = summary.filter(r =>
-    r.alert === '🔴 BUY BOX HIJACKED' &&
-    !r.suppress
-  );
-
-  // Other issues: unavailable/no buttons/blocked/error on non-suppressed listings
-  const issues = summary.filter(r =>
+  const hijacked            = summary.filter(r => r.alert === '🔴 BUY BOX HIJACKED' && !r.suppress);
+  const issues              = summary.filter(r =>
     r.alert !== '✅ LIVE' &&
     !r.suppress &&
     !r.reactivated &&
@@ -1279,7 +1270,6 @@ async function main() {
   const summary      = allResults.flatMap(r => r.summary);
   const historyRows  = allResults.flatMap(r => r.historyRows);
   const totalChecked = summary.length;
-  // Active = excludes CLOSED and NOT LISTED (intentionally suppressed, not OOS)
   const totalActive  = summary.filter(r => !/^(closed|not listed)$/i.test((r.manualNote || '').trim())).length;
   const totalBlocked = allResults.reduce((n, r) => n + r.totalBlocked, 0);
   const totalErrors  = allResults.reduce((n, r) => n + r.totalErrors,  0);
@@ -1302,13 +1292,11 @@ async function main() {
   await sendEmailSummary(summary, totalChecked, totalActive, totalBlocked, totalErrors, startTime, scope);
 }
 
-// ─── SIGTERM / SIGINT HANDLER — fires when run is cancelled from anywhere ───────
-// GitHub Actions sends SIGTERM then SIGKILL after ~5s — we must finish quickly
+// ─── SIGTERM / SIGINT HANDLER ──────────────────────────────────────────────────
 async function sendStopNotification() {
   const msg = '🔴 <b>Check stopped</b>\n\n❌ Run was cancelled';
   console.log('\n⚠️ Run cancelled — sending Telegram notification...');
   try {
-    // Race against a 4 second timeout to ensure we finish before SIGKILL
     await Promise.race([
       sendTelegram(msg),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
